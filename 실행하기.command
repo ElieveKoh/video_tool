@@ -4,7 +4,7 @@ echo "🎥 스마트 비디오 변환기"
 echo "====================="
 
 # 앱 버전 (릴리즈할 때 함께 갱신)
-APP_VERSION="6.0.1"
+APP_VERSION="6.0.2"
 # GitHub 저장소 (예: channy/video-tool)
 GITHUB_REPO="ElieveKoh/video_tool"
 

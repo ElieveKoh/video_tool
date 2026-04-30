@@ -149,6 +149,10 @@ Made with love by Channy
 
 ## Version History
 
+### v6.0.2 - 2026.04.30
+- Added writable-path validation for YouTube download save directory
+- Automatically falls back to `~/Downloads` when configured path is not writable
+
 ### v6.0.1 - 2026.04.30
 - Fixed AppTranslocation read-only path issue when launching `VideoTool.app`
 - Moved runtime venv/binaries to user-writable path (`~/Library/Application Support/VideoTool`)

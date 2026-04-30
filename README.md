@@ -150,6 +150,10 @@ VideoTool/
 
 ## 📋 Version History
 
+### **v6.0.2** - 2026.04.30
+- 🛡️ 유튜브 다운로드 저장 경로 쓰기 권한 체크 로직 추가
+- 🔁 저장 경로가 쓰기 불가하면 자동으로 `~/Downloads`로 폴백
+
 ### **v6.0.1** - 2026.04.30
 - 🐛 `VideoTool.app` 실행 시 AppTranslocation 읽기 전용 경로 문제 수정
 - 🛠️ 가상환경/바이너리 경로를 사용자 홈(`~/Library/Application Support/VideoTool`)으로 변경

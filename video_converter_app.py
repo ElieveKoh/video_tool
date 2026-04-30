@@ -902,6 +902,28 @@ def scan_folder_files(folder_path):
     except Exception as e:
         st.error(f"Folder scan error: {e}")
 
+def resolve_writable_save_path(configured_path):
+    """저장 경로가 유효/쓰기 가능한지 확인하고 안전한 경로를 반환"""
+    fallback_path = os.path.join(os.path.expanduser("~"), "Downloads")
+    target_path = configured_path or fallback_path
+
+    def _is_writable(path):
+        try:
+            os.makedirs(path, exist_ok=True)
+            probe_file = os.path.join(path, ".videotool_write_probe")
+            with open(probe_file, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(probe_file)
+            return True
+        except Exception:
+            return False
+
+    if _is_writable(target_path):
+        return target_path, None
+
+    os.makedirs(fallback_path, exist_ok=True)
+    return fallback_path, f"⚠️ Save path is not writable: `{target_path}`. Switched to `{fallback_path}`."
+
 def convert_videos_realtime(selected_files, target_codec, target_resolution, quality_preset, selected_fps="original", selected_scan="progressive", custom_video_br=None, custom_audio_br=None):
     """실시간 비디오 변환 함수"""
     total_files = len(selected_files)
@@ -1022,10 +1044,13 @@ def batch_download_and_convert(selected_items):
     st.markdown(f"### 🎬 Batch Download + Conversion Progress ({total_videos} videos)")
 
     # 저장 경로 설정
-    save_path = st.session_state.get('yt_save_folder_path', os.path.join(os.getcwd(), "youtube_downloads"))
-    os.makedirs(save_path, exist_ok=True)
+    configured_path = st.session_state.get('yt_save_folder_path')
+    save_path, save_path_warning = resolve_writable_save_path(configured_path)
+    st.session_state['yt_save_folder_path'] = save_path
 
     st.info(f"📂 Save location: {save_path}")
+    if save_path_warning:
+        st.warning(save_path_warning)
 
     # 전체 진행률
     overall_progress = st.progress(0)
@@ -1185,10 +1210,13 @@ def download_and_convert_youtube(url, target_codec, target_resolution, quality_p
         st.markdown("### 📥 YouTube Download + Conversion Progress")
     
     # 저장 경로 설정
-    save_path = st.session_state.get('yt_save_folder_path', os.path.join(os.getcwd(), "youtube_downloads"))
-    os.makedirs(save_path, exist_ok=True)
+    configured_path = st.session_state.get('yt_save_folder_path')
+    save_path, save_path_warning = resolve_writable_save_path(configured_path)
+    st.session_state['yt_save_folder_path'] = save_path
     
     st.info(f"📂 Save location: {save_path}")
+    if save_path_warning:
+        st.warning(save_path_warning)
     
     # 진행률 표시
     download_progress = st.progress(0)

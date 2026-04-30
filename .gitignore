@@ -5,3 +5,4 @@ converted_*/
 youtube_downloads/
 .DS_Store
 release/
+__pycache__/
