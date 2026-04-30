@@ -144,6 +144,10 @@ VideoTool/
 
 ## 📋 Version History
 
+### **v6.0.1** - 2026.04.30
+- 🐛 `VideoTool.app` 실행 시 AppTranslocation 읽기 전용 경로 문제 수정
+- 🛠️ 런타임 경로를 사용자 홈으로 변경하여 권한 문제 방지
+
 ### **v6.0** - 2026.04.30
 - 🆕 GitHub Releases 기반 자동 업데이트(원클릭) 추가
 - 🍎 `VideoTool.app` 실행 경로에서도 업데이트 동작하도록 개선

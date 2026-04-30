@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Video Tool v6.0 Launcher
+# Video Tool v6.0.1 Launcher
 # 앱 버전 (릴리즈할 때 함께 갱신)
-APP_VERSION="6.0.0"
+APP_VERSION="6.0.1"
 # GitHub 저장소
 GITHUB_REPO="ElieveKoh/video_tool"
 
@@ -25,6 +25,12 @@ fi
 # 실제 실행
 APP_DIR="$SCRIPT_DIR"
 cd "$APP_DIR"
+RUNTIME_ROOT="$HOME/Library/Application Support/VideoTool"
+RUNTIME_BIN_DIR="$RUNTIME_ROOT/bin"
+RUNTIME_VENV_DIR="$RUNTIME_ROOT/venv"
+RUNTIME_CACHE_DIR="$HOME/Library/Caches/VideoTool"
+
+mkdir -p "$RUNTIME_ROOT" "$RUNTIME_BIN_DIR" "$RUNTIME_CACHE_DIR" 2>/dev/null || true
 
 check_and_apply_update() {
     if [ -z "$GITHUB_REPO" ] || [ "$GITHUB_REPO" = "OWNER/REPO" ]; then
@@ -118,7 +124,7 @@ PY
         return 0
     fi
 
-    local tmp_dir="$APP_DIR/.update_tmp"
+    local tmp_dir="$RUNTIME_CACHE_DIR/update_tmp"
     rm -rf "$tmp_dir"
     mkdir -p "$tmp_dir"
 
@@ -236,43 +242,53 @@ echo "✅ Python 발견: $PYTHON_CMD"
 
 check_and_apply_update
 
-# FFmpeg 확인 (로컬 우선)
-if command -v ffmpeg &> /dev/null || [ -f "$APP_DIR/bin/ffmpeg" ]; then
+# FFmpeg 확인 (시스템 우선, 런타임 폴더 보조)
+if command -v ffmpeg &> /dev/null || [ -f "$RUNTIME_BIN_DIR/ffmpeg" ]; then
     echo "✅ FFmpeg 이미 설치됨"
 else
     echo "📦 FFmpeg 다운로드 중..."
-    mkdir -p "$APP_DIR/bin"
+    mkdir -p "$RUNTIME_BIN_DIR"
     curl -L "https://evermeet.cx/ffmpeg/getrelease/zip" -o /tmp/ffmpeg.zip
-    unzip -q /tmp/ffmpeg.zip -d "$APP_DIR/bin/"
+    unzip -q /tmp/ffmpeg.zip -d "$RUNTIME_BIN_DIR/"
     rm /tmp/ffmpeg.zip
-    chmod +x "$APP_DIR/bin/ffmpeg"
+    chmod +x "$RUNTIME_BIN_DIR/ffmpeg"
     echo "✅ FFmpeg 설치 완료"
 fi
 
-# yt-dlp 확인 (로컬 우선)
-if command -v yt-dlp &> /dev/null || [ -f "$APP_DIR/bin/yt-dlp" ]; then
+# yt-dlp 확인 (시스템 우선, 런타임 폴더 보조)
+if command -v yt-dlp &> /dev/null || [ -f "$RUNTIME_BIN_DIR/yt-dlp" ]; then
     echo "✅ yt-dlp 이미 설치됨"
 else
     echo "📦 yt-dlp 다운로드 중..."
-    mkdir -p "$APP_DIR/bin"
-    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o "$APP_DIR/bin/yt-dlp"
-    chmod +x "$APP_DIR/bin/yt-dlp"
+    mkdir -p "$RUNTIME_BIN_DIR"
+    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o "$RUNTIME_BIN_DIR/yt-dlp"
+    chmod +x "$RUNTIME_BIN_DIR/yt-dlp"
     echo "✅ yt-dlp 설치 완료"
 fi
 
 # PATH 설정
-export PATH="$APP_DIR/bin:$PATH"
+export PATH="$RUNTIME_BIN_DIR:$PATH"
 
-# Python 가상환경
-if [ -d "$APP_DIR/venv" ]; then
+# Python 가상환경 (앱 번들이 아닌 사용자 홈 경로 사용)
+if [ -d "$RUNTIME_VENV_DIR" ]; then
     echo "✅ Python 가상환경 이미 존재"
 else
     echo "📦 Python 가상환경 생성 중..."
-    $PYTHON_CMD -m venv "$APP_DIR/venv"
-    echo "✅ Python 가상환경 생성 완료"
+    if "$PYTHON_CMD" -m venv "$RUNTIME_VENV_DIR"; then
+        echo "✅ Python 가상환경 생성 완료"
+    else
+        echo "❌ Python 가상환경 생성 실패"
+        osascript -e 'display dialog "❌ Python 가상환경을 만들 수 없습니다.\n\n디스크 권한 또는 저장공간을 확인해주세요." buttons {"확인"} default button "확인" with icon stop' 2>/dev/null || true
+        exit 1
+    fi
 fi
 
-source "$APP_DIR/venv/bin/activate"
+if [ -f "$RUNTIME_VENV_DIR/bin/activate" ]; then
+    source "$RUNTIME_VENV_DIR/bin/activate"
+else
+    echo "❌ Python 실행 환경을 찾을 수 없습니다."
+    exit 1
+fi
 
 # pip 업그레이드
 echo "📦 pip 업그레이드 중..."

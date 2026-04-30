@@ -149,6 +149,10 @@ Made with love by Channy
 
 ## Version History
 
+### v6.0.1 - 2026.04.30
+- Fixed AppTranslocation read-only path issue when launching `VideoTool.app`
+- Moved runtime venv/binaries to user-writable path (`~/Library/Application Support/VideoTool`)
+
 ### v6.0 - 2026.04.30
 - Added GitHub Releases-based one-confirmation auto updater
 - Enabled updater for both launcher script and `VideoTool.app` launch path
