@@ -1,4 +1,4 @@
-# 🎥 Video Tool v5.0
+# 🎥 Video Tool v6.0
 
 완전 자동 설치가 가능한 Streamlit 기반 비디오 변환 도구
 
@@ -11,6 +11,14 @@
 - **🎛️ 커스텀 비트레이트**: 비디오/오디오 비트레이트 직접 설정
 - **📥 유튜브 배치 다운로드**: 여러 영상을 Queue에 추가하여 일괄 다운로드/변환
 - **🔄 실시간 모니터링**: 진행률, 예상 시간, 중단 기능
+- **🆕 앱 자동 업데이트**: 실행 시 GitHub Releases 최신 버전 감지 후 원클릭 업데이트
+
+## 🔄 자동 업데이트 (Mac)
+
+- `실행하기.command` 또는 `VideoTool.app` 실행 시 최신 릴리즈를 자동 확인합니다.
+- 새 버전이 있으면 `지금 업데이트할까요? [Y/n]` 안내가 표시됩니다.
+- `Y`를 누르면 업데이트 파일 다운로드 후 자동 적용되고 앱이 재시작됩니다.
+- 업데이트 소스: `https://github.com/ElieveKoh/video_tool/releases`
 
 ## 🚀 사용 방법
 
@@ -141,6 +149,11 @@ VideoTool/
 **Made with ❤️ by Channy**
 
 ## 📋 Version History
+
+### **v6.0** - 2026.04.30
+- 🆕 GitHub Releases 기반 자동 업데이트(원클릭) 추가
+- 🍎 `VideoTool.app` 실행 경로에서도 업데이트 동작하도록 개선
+- 🛡️ 업데이트 시 사용자 작업 폴더/로컬 의존성 폴더 보존 처리
 
 ### **v5.0** - 2025.11.26
 - 🎨 탭 SVG 아이콘 추가 (Video Conversion, YouTube Download)

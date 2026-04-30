@@ -1,4 +1,4 @@
-# Video Tool v5.0
+# Video Tool v6.0
 
 Streamlit-based video conversion tool with automatic installation
 
@@ -11,6 +11,14 @@ Streamlit-based video conversion tool with automatic installation
 - Custom Bitrate: Set video/audio bitrate manually
 - YouTube Batch Download: Queue multiple videos for batch download/conversion
 - Real-time Monitoring: Progress, ETA, stop function
+- App Auto Update: Detect latest GitHub Release on launch and update with one confirmation
+
+## Auto Update (Mac)
+
+- Running `run.command`/`실행하기.command` or `VideoTool.app` checks the latest release automatically.
+- If a newer version exists, the launcher prompts: `Update now? [Y/n]`.
+- On confirmation, it downloads, applies the update, and restarts automatically.
+- Update source: `https://github.com/ElieveKoh/video_tool/releases`
 
 ## How to Use
 
@@ -140,6 +148,11 @@ Free for personal and commercial use.
 Made with love by Channy
 
 ## Version History
+
+### v6.0 - 2026.04.30
+- Added GitHub Releases-based one-confirmation auto updater
+- Enabled updater for both launcher script and `VideoTool.app` launch path
+- Preserved local runtime folders during updates (`venv`, `bin`, output folders)
 
 ### v5.0 - 2025.11.26
 - Added SVG tab icons

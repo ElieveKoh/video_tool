@@ -1,9 +1,15 @@
 #!/bin/bash
 
 # Video Tool v6.0 Launcher
+# 앱 버전 (릴리즈할 때 함께 갱신)
+APP_VERSION="6.0.0"
+# GitHub 저장소
+GITHUB_REPO="ElieveKoh/video_tool"
+
 # 앱 번들 내부 경로
 SCRIPT_DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
 LAUNCHER_SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+APP_BUNDLE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
 # --run 플래그가 없으면 터미널에서 실행
 if [ "$1" != "--run" ]; then
@@ -19,6 +25,165 @@ fi
 # 실제 실행
 APP_DIR="$SCRIPT_DIR"
 cd "$APP_DIR"
+
+check_and_apply_update() {
+    if [ -z "$GITHUB_REPO" ] || [ "$GITHUB_REPO" = "OWNER/REPO" ]; then
+        echo "ℹ️  자동 업데이트 저장소가 설정되지 않아 현재 버전으로 실행합니다."
+        return 0
+    fi
+
+    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    local release_json
+    release_json="$(curl -fsSL "$api_url" 2>/dev/null)"
+
+    if [ -z "$release_json" ]; then
+        echo "ℹ️  업데이트 서버에 연결할 수 없어 현재 버전으로 실행합니다."
+        return 0
+    fi
+
+    local latest_tag
+    latest_tag="$(python3 - <<'PY' "$release_json"
+import json, sys
+try:
+    data = json.loads(sys.argv[1])
+    print(data.get("tag_name", "").strip())
+except Exception:
+    print("")
+PY
+)"
+
+    if [ -z "$latest_tag" ]; then
+        return 0
+    fi
+
+    local latest_version="${latest_tag#v}"
+    local needs_update
+    needs_update="$(python3 - <<'PY' "$APP_VERSION" "$latest_version"
+import re, sys
+def parse(v: str):
+    nums = re.findall(r"\d+", v)
+    return [int(x) for x in nums] if nums else [0]
+def cmp(a, b):
+    n = max(len(a), len(b))
+    a = a + [0] * (n - len(a))
+    b = b + [0] * (n - len(b))
+    return (a > b) - (a < b)
+print("yes" if cmp(parse(sys.argv[1]), parse(sys.argv[2])) < 0 else "no")
+PY
+)"
+
+    if [ "$needs_update" != "yes" ]; then
+        return 0
+    fi
+
+    echo ""
+    echo "🆕 새 버전이 있습니다!"
+    echo "   현재: v$APP_VERSION"
+    echo "   최신: $latest_tag"
+    read -r -p "지금 업데이트할까요? [Y/n] " answer
+    case "$answer" in
+        [Nn]*)
+            echo "⏭️  업데이트를 건너뜁니다."
+            return 0
+            ;;
+    esac
+
+    local download_url
+    download_url="$(python3 - <<'PY' "$release_json"
+import json, sys
+try:
+    data = json.loads(sys.argv[1])
+    assets = data.get("assets", [])
+    preferred = None
+    fallback = None
+    for a in assets:
+        name = str(a.get("name", "")).lower()
+        url = a.get("browser_download_url", "")
+        if not url:
+            continue
+        if name.endswith(".zip"):
+            if "mac" in name or "video" in name or "tool" in name:
+                preferred = url
+                break
+            if fallback is None:
+                fallback = url
+    print(preferred or fallback or data.get("zipball_url", ""))
+except Exception:
+    print("")
+PY
+)"
+
+    if [ -z "$download_url" ]; then
+        echo "❌ 다운로드 URL을 찾지 못했습니다."
+        return 0
+    fi
+
+    local tmp_dir="$APP_DIR/.update_tmp"
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir"
+
+    echo "📥 업데이트 다운로드 중..."
+    if ! curl -fL "$download_url" -o "$tmp_dir/update.zip"; then
+        echo "❌ 업데이트 다운로드 실패"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    if ! unzip -q "$tmp_dir/update.zip" -d "$tmp_dir/extracted"; then
+        echo "❌ 업데이트 압축 해제 실패"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    local src_dir=""
+    if [ -d "$tmp_dir/extracted/VideoTool.app" ]; then
+        src_dir="$tmp_dir/extracted/VideoTool.app"
+    elif [ -f "$tmp_dir/extracted/Contents/MacOS/VideoTool" ]; then
+        src_dir="$tmp_dir/extracted"
+    else
+        for candidate in "$tmp_dir/extracted"/*; do
+            if [ -d "$candidate/VideoTool.app" ]; then
+                src_dir="$candidate/VideoTool.app"
+                break
+            fi
+            if [ -f "$candidate/Contents/MacOS/VideoTool" ]; then
+                src_dir="$candidate"
+                break
+            fi
+        done
+    fi
+
+    if [ -z "$src_dir" ]; then
+        echo "❌ 업데이트 파일 구조를 확인할 수 없습니다."
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    if ! command -v rsync >/dev/null 2>&1; then
+        echo "❌ rsync가 없어 업데이트를 적용할 수 없습니다."
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    echo "📦 업데이트 적용 중..."
+    if ! rsync -a \
+        --exclude "Contents/Resources/venv/" \
+        --exclude "Contents/Resources/bin/" \
+        --exclude "Contents/Resources/converted_*/" \
+        --exclude "Contents/Resources/youtube_downloads/" \
+        --exclude ".update_tmp/" \
+        "$src_dir/" "$APP_BUNDLE_DIR/"; then
+        echo "❌ 업데이트 적용 실패"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    chmod +x "$APP_BUNDLE_DIR/Contents/MacOS/VideoTool" 2>/dev/null || true
+    rm -rf "$tmp_dir"
+
+    echo "✅ 업데이트 완료! 최신 버전으로 다시 시작합니다."
+    exec "$LAUNCHER_SCRIPT" --run
+}
 
 # Python 경로 찾기 함수 (Skips25 방식 적용)
 find_python() {
@@ -68,6 +233,8 @@ if [[ -z "$PYTHON_CMD" ]]; then
 fi
 
 echo "✅ Python 발견: $PYTHON_CMD"
+
+check_and_apply_update
 
 # FFmpeg 확인 (로컬 우선)
 if command -v ffmpeg &> /dev/null || [ -f "$APP_DIR/bin/ffmpeg" ]; then
