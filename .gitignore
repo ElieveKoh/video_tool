@@ -4,3 +4,4 @@ bin/
 converted_*/
 youtube_downloads/
 .DS_Store
+release/
