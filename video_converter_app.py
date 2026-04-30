@@ -641,9 +641,13 @@ class YouTubeDownloader:
             except subprocess.TimeoutExpired:
                 self.download_process.kill()
 
+# 앱 메타 정보
+APP_NAME = "Video Tool"
+APP_VERSION = "6.0.3"
+
 # 페이지 설정
 st.set_page_config(
-    page_title="Video Tool v6.0",
+    page_title=f"{APP_NAME} v{APP_VERSION}",
     page_icon="🎥",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -675,36 +679,176 @@ def init_session_state():
 
 init_session_state()
 
-# === VideoTool v6.0 통합 CSS ===
-st.markdown("""
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+# === VideoTool v6.0 Lumina UI CSS ===
+# Use st.html (not st.markdown) — markdown parser treats 4-space indented CSS rules as code blocks.
+st.html("""
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
 <style>
 :root {
-    --bg-primary: #ffffff; --bg-secondary: #f6f8fa; --bg-tertiary: #eef1f5; --bg-input: #ffffff;
-    --border-default: #d0d7de; --border-accent: #ff4b4b;
-    --text-primary: #1f2328; --text-secondary: #656d76; --text-muted: #8b949e;
-    --accent: #ff4b4b; --accent-hover: #e03e3e;
+    /* Material 3 light tokens */
+    --m-surface: #fcf8fb;
+    --m-surface-low: #f6f3f5;
+    --m-surface-container: #f0edef;
+    --m-surface-high: #eae7ea;
+    --m-surface-variant: #e4e2e4;
+    --m-surface-dim: #dcd9dc;
+    --m-on-surface: #1b1b1d;
+    --m-on-surface-variant: #414755;
+    --m-outline: #717786;
+    --m-outline-variant: #c1c6d7;
+    --m-primary: #0058bc;
+    --m-primary-container: #0070eb;
+    --m-on-primary: #ffffff;
+    --m-primary-fixed: #d8e2ff;
+    --m-tertiary: #8a2bb9;
+    --m-tertiary-fixed: #f6d9ff;
+    --m-secondary: #4c4aca;
+    --m-secondary-fixed: #e2dfff;
+    --m-error: #ba1a1a;
+
+    /* Aliases used across the app */
+    --bg-primary: var(--m-surface); --bg-secondary: var(--m-surface-low); --bg-tertiary: var(--m-surface-container); --bg-input: var(--m-surface-container-lowest, #ffffff);
+    --border-default: var(--m-outline-variant); --border-accent: var(--m-primary);
+    --text-primary: var(--m-on-surface); --text-secondary: var(--m-on-surface-variant); --text-muted: var(--m-outline);
+    --accent: var(--m-primary); --accent-hover: var(--m-primary-container);
     --success: #2ea043; --warning: #d29922; --info: #58a6ff;
-    --card-shadow: 0 1px 3px rgba(0,0,0,0.06);
+
+    /* Glass — Lumina spec */
+    --glass-bg: rgba(255, 255, 255, 0.40);
+    --glass-bg-strong: rgba(255, 255, 255, 0.62);
+    --glass-border: rgba(255, 255, 255, 0.80);
+    --glass-shadow: 0 10px 40px rgba(0, 0, 0, 0.05);
+    --card-shadow: 0 8px 32px rgba(31, 38, 135, 0.07);
+
+    /* Layout chrome */
+    --topnav-h: 64px;
+    --sidenav-w: 0px;
+    --footer-h: 32px;
 }
 [data-theme="dark"] {
-    --bg-primary: #0d1117; --bg-secondary: #161b22; --bg-tertiary: #21262d; --bg-input: #0d1117;
-    --border-default: #30363d; --border-accent: #ff4b4b;
-    --text-primary: #f0f6fc; --text-secondary: #8b949e; --text-muted: #6e7681;
-    --accent: #ff6b6b; --accent-hover: #ff4b4b;
-    --success: #3fb950; --warning: #d29922; --info: #58a6ff;
-    --card-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    --m-surface: #0f172a;
+    --m-surface-low: #111827;
+    --m-surface-container: #1e293b;
+    --m-surface-high: #243044;
+    --m-surface-variant: #334155;
+    --m-on-surface: #e2e8f0;
+    --m-on-surface-variant: #94a3b8;
+    --m-outline: #64748b;
+    --m-outline-variant: #334155;
+    --m-primary: #adc6ff;
+    --m-primary-container: #0070eb;
+    --m-on-primary: #001a41;
+    --m-primary-fixed: #d8e2ff;
+    --m-tertiary: #e8b3ff;
+    --m-tertiary-fixed: #7201a2;
+    --m-secondary: #c2c1ff;
+    --m-secondary-fixed: #3631b4;
+
+    --bg-primary: var(--m-surface); --bg-secondary: var(--m-surface-low); --bg-tertiary: var(--m-surface-container); --bg-input: var(--m-surface-container);
+    --border-default: var(--m-outline-variant); --border-accent: var(--m-primary);
+    --text-primary: var(--m-on-surface); --text-secondary: var(--m-on-surface-variant); --text-muted: var(--m-outline);
+    --accent: #6ea8ff; --accent-hover: #adc6ff;
+    --success: #3fb950; --warning: #d29922; --info: #6ea8ff;
+
+    --glass-bg: rgba(15, 23, 42, 0.40);
+    --glass-bg-strong: rgba(15, 23, 42, 0.62);
+    --glass-border: rgba(148, 163, 184, 0.24);
+    --glass-shadow: 0 10px 40px rgba(2, 6, 23, 0.40);
+    --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.30);
 }
 * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
-[data-testid="stIconMaterial"], .material-symbols-rounded { font-family: 'Material Symbols Rounded' !important; }
-.stApp { background-color: var(--bg-primary) !important; }
-.stApp > header { height: 0rem; background-color: var(--bg-primary) !important; }
-header[data-testid="stHeader"] { background-color: var(--bg-primary) !important; }
-[data-theme="dark"] header[data-testid="stHeader"] { background-color: #0d1117 !important; }
-.main .block-container { padding-top: 1rem; padding-bottom: 3.5rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }
+.material-symbols-outlined, [data-testid="stIconMaterial"], .material-symbols-rounded {
+    font-family: 'Material Symbols Outlined' !important;
+    font-weight: normal; font-style: normal; line-height: 1;
+    letter-spacing: normal; text-transform: none; display: inline-block;
+    white-space: nowrap; word-wrap: normal; direction: ltr;
+    -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased;
+}
+.stApp { background: var(--m-surface) !important; }
+[data-theme="dark"] .stApp { background: var(--m-surface) !important; }
+
+/* === Mesh background (3 orbs, Lumina spec) === */
+body::before, body::after, .vt-mesh { pointer-events: none; }
+body::before {
+    content: "";
+    position: fixed;
+    top: -10%; left: -10%;
+    width: 50vw; height: 50vw;
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(216,226,255,0.6) 0%, rgba(216,226,255,0) 70%);
+    filter: blur(20px);
+    z-index: 0;
+}
+body::after {
+    content: "";
+    position: fixed;
+    bottom: -20%; right: -10%;
+    width: 60vw; height: 60vw;
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(246,217,255,0.5) 0%, rgba(246,217,255,0) 70%);
+    filter: blur(20px);
+    z-index: 0;
+}
+[data-theme="dark"] body::before {
+    background: radial-gradient(circle, rgba(0,88,188,0.30) 0%, rgba(0,88,188,0) 65%);
+}
+[data-theme="dark"] body::after {
+    background: radial-gradient(circle, rgba(138,43,185,0.28) 0%, rgba(138,43,185,0) 65%);
+}
+
+.stApp > header { height: 0rem; background-color: transparent !important; }
+header[data-testid="stHeader"] { background-color: transparent !important; position: relative; z-index: 1; }
+[data-testid="stAppViewContainer"] { position: relative; z-index: 1; }
+
+/* Push main content below fixed TopNav and right of fixed SideNav */
+.main .block-container {
+    padding-top: calc(var(--topnav-h) + 24px);
+    padding-bottom: calc(var(--footer-h) + 32px);
+    padding-left: 24px;
+    padding-right: 24px;
+    max-width: 100%;
+}
+
+/* === TopNavBar === */
+.vt-topnav {
+    position: fixed; top: 0; left: 0; right: 0; height: var(--topnav-h);
+    z-index: 1000; padding: 0 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    background: rgba(255,255,255,0.70);
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    border-bottom: 0.5px solid rgba(255,255,255,0.80);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.05);
+}
+[data-theme="dark"] .vt-topnav { background: rgba(15,23,42,0.60); border-bottom-color: rgba(255,255,255,0.10); }
+.vt-topnav__brand { display: flex; align-items: center; gap: 12px; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; color: var(--text-primary); }
+.vt-topnav__brand-mark {
+    width: 34px; height: 34px; border-radius: 11px;
+    background: linear-gradient(135deg, #e0f2fe, #ddd6fe);
+    display: inline-flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.10);
+    border: 0.5px solid rgba(255,255,255,0.75);
+    overflow: hidden;
+}
+.vt-topnav__logo-emoji {
+    font-size: 21px;
+    line-height: 1;
+    transform: translateY(-0.5px);
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,0.22));
+}
+[data-theme="dark"] .vt-topnav__brand-mark {
+    background: linear-gradient(135deg, #dbeafe, #c4b5fd);
+    border: 0.5px solid rgba(226,232,240,0.60);
+}
+.vt-topnav__right { display: flex; align-items: center; gap: 8px; }
+.vt-topnav__icon-btn { width: 36px; height: 36px; border-radius: 9999px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-secondary); background: transparent; border: none; cursor: pointer; transition: background-color 160ms ease; }
+.vt-topnav__icon-btn:hover { background: rgba(255,255,255,0.50); color: var(--text-primary); }
+[data-theme="dark"] .vt-topnav__icon-btn:hover { background: rgba(30,41,59,0.50); }
+
 footer { visibility: hidden !important; }
 .stAppDeployButton, button[data-testid="stAppDeployButton"] { display: none !important; }
-[data-testid="stMainMenu"] { display: block !important; visibility: visible !important; opacity: 1 !important; position: fixed !important; top: 0.75rem !important; right: 1rem !important; z-index: 999999 !important; }
+[data-testid="stMainMenu"] { display: none !important; visibility: hidden !important; opacity: 0 !important; }
 [data-theme="dark"] p, [data-theme="dark"] span, [data-theme="dark"] label, [data-theme="dark"] h1, [data-theme="dark"] h2, [data-theme="dark"] h3, [data-theme="dark"] h4, [data-theme="dark"] h5, [data-theme="dark"] h6, [data-theme="dark"] div, [data-theme="dark"] li, [data-theme="dark"] td, [data-theme="dark"] th { color: var(--text-primary) !important; }
 [data-theme="dark"] .stMarkdown, [data-theme="dark"] .stMarkdown p, [data-theme="dark"] [data-testid="stMarkdownContainer"] p { color: var(--text-primary) !important; }
 [data-theme="dark"] .element-container { color: var(--text-primary) !important; }
@@ -728,79 +872,246 @@ footer { visibility: hidden !important; }
 [data-theme="dark"] code { background-color: var(--bg-tertiary) !important; color: var(--text-primary) !important; }
 [data-theme="dark"] pre { background-color: var(--bg-tertiary) !important; border-color: var(--border-default) !important; }
 [data-theme="dark"] hr { border-color: var(--border-default) !important; }
-.st-key-config_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-left: 4px solid var(--border-accent); border-radius: 0.75rem; padding: 1.25rem; box-shadow: var(--card-shadow); }
-.st-key-file_source > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 1rem; margin-top: 1rem; box-shadow: var(--card-shadow); }
-.st-key-queue_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 1.25rem; box-shadow: var(--card-shadow); }
-.st-key-mute_card > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-left: 4px solid var(--border-accent); border-radius: 0.75rem; padding: 1.5rem; box-shadow: var(--card-shadow); max-width: 700px; margin: 0 auto; }
-.st-key-yt_config_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-left: 4px solid var(--border-accent); border-radius: 0.75rem; padding: 1.25rem; box-shadow: var(--card-shadow); }
-.st-key-yt_queue_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 1.25rem; box-shadow: var(--card-shadow); }
-.vt-section-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 0.75rem; }
-.vt-stats-row { display: flex; gap: 0.75rem; margin-bottom: 1.25rem; }
-.vt-stats-card { flex: 1; background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 0.85rem 1rem; text-align: center; box-shadow: var(--card-shadow); }
-.vt-stats-card__label { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.25rem; }
-.vt-stats-card__value { font-size: 1.3rem; font-weight: 700; color: var(--text-primary); }
-.vt-stats-card__value--accent { color: var(--accent); }
+/* === Glass panels (Lumina spec) === */
+.st-key-config_panel > div, .st-key-file_source > div, .st-key-queue_panel > div, .st-key-mute_card > div, .st-key-yt_config_panel > div, .st-key-yt_queue_panel > div, .st-key-yt_save_panel > div {
+    background: var(--glass-bg);
+    border: 0.5px solid var(--glass-border);
+    border-radius: 24px;
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+.st-key-config_panel > div, .st-key-yt_config_panel > div { padding: 24px; }
+.st-key-file_source > div { padding: 18px; margin-top: 12px; }
+.st-key-queue_panel > div, .st-key-yt_queue_panel > div { padding: 24px; }
+.st-key-mute_card > div { padding: 28px; max-width: 760px; margin: 0 auto; }
+
+.vt-section-label { font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 12px; }
+
+/* === Stat cards (Lumina display-lg) === */
+.vt-stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.vt-stats-card {
+    position: relative; overflow: hidden;
+    background: var(--glass-bg);
+    border: 0.5px solid var(--glass-border);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+.vt-stats-card::after {
+    content: ""; position: absolute; top: -16px; right: -16px;
+    width: 96px; height: 96px; border-radius: 9999px;
+    background: var(--m-primary-fixed); opacity: 0.45;
+    filter: blur(16px);
+    transition: opacity 200ms ease;
+    pointer-events: none;
+}
+.vt-stats-card:hover::after { opacity: 0.65; }
+.vt-stats-card:nth-child(2)::after { background: var(--m-tertiary-fixed); }
+.vt-stats-card:nth-child(3)::after { background: var(--m-secondary-fixed); }
+.vt-stats-card__head { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); margin-bottom: 8px; position: relative; z-index: 1; }
+.vt-stats-card__head .material-symbols-outlined { font-size: 18px; }
+.vt-stats-card__label { font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.vt-stats-card__value { font-size: 40px; font-weight: 700; letter-spacing: -0.04em; line-height: 1.1; color: var(--text-primary); position: relative; z-index: 1; }
+.vt-stats-card__unit { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--text-muted); margin-left: 8px; }
+.vt-stats-card__value--accent { color: var(--m-primary); }
+
+/* legacy class kept for YT row, now restyled to match */
+.vt-stats-row--yt .vt-stats-card::after { background: var(--m-tertiary-fixed); }
 .vt-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
 .vt-badge--ready { background: rgba(46,160,67,0.15); color: var(--success); border: 1px solid rgba(46,160,67,0.3); }
 .vt-badge--pending { background: rgba(210,153,34,0.15); color: var(--warning); border: 1px solid rgba(210,153,34,0.3); }
 .vt-badge--processing { background: rgba(88,166,255,0.15); color: var(--info); border: 1px solid rgba(88,166,255,0.3); }
-.vt-status-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 2.5rem; z-index: 999; background: var(--bg-secondary); border-top: 1px solid var(--border-default); display: flex; align-items: center; justify-content: center; gap: 1.5rem; font-size: 0.72rem; color: var(--text-secondary); }
-.vt-status-bar strong { color: var(--text-primary); font-weight: 600; }
-.vt-header { text-align: center; margin-bottom: 1.5rem; margin-top: -0.5rem; }
-.vt-header__title { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.03em; background: linear-gradient(135deg, #ff4b4b, #f97316); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin: 0; }
-.vt-header__subtitle { color: var(--text-secondary); font-size: 0.8rem; font-weight: 500; margin-top: 0.25rem; }
-.vt-header__badges { display: flex; justify-content: center; gap: 0.4rem; margin-top: 0.6rem; flex-wrap: wrap; }
-.vt-header__badge { color: white; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.05em; }
-button[kind="primary"] { background-color: var(--accent) !important; border-color: var(--accent) !important; color: white !important; font-weight: 600 !important; border-radius: 0.5rem !important; }
-button[kind="primary"]:hover { background-color: var(--accent-hover) !important; }
-button[kind="secondary"] { background-color: var(--bg-secondary) !important; border: 1px solid var(--border-default) !important; color: var(--text-primary) !important; font-weight: 500 !important; border-radius: 0.5rem !important; }
-button[kind="secondary"]:hover { background-color: var(--bg-tertiary) !important; }
+/* === Footer status bar (Lumina) === */
+.vt-status-bar {
+    position: fixed; bottom: 0; left: 0; right: 0; height: var(--footer-h);
+    z-index: 999; padding: 0 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 10px; font-weight: 500; letter-spacing: 0.02em; color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    background: rgba(248,250,252,0.80);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border-top: 0.5px solid rgba(255,255,255,0.40);
+}
+[data-theme="dark"] .vt-status-bar { background: rgba(15,23,42,0.80); border-top-color: rgba(255,255,255,0.05); }
+.vt-status-bar strong { color: var(--text-secondary); font-weight: 600; }
+.vt-status-bar__group { display: flex; align-items: center; gap: 16px; }
+
+/* === Section header (renamed Lumina-style) === */
+.vt-header { margin: 0 0 24px 0; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.vt-header__title { font-size: 28px; font-weight: 700; letter-spacing: -0.03em; color: var(--text-primary); margin: 0; line-height: 1.15; }
+.vt-header__subtitle { color: var(--text-secondary); font-size: 14px; font-weight: 400; margin: 4px 0 0 0; }
+.vt-header__badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.vt-header__badge { padding: 4px 10px; border-radius: 9999px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; background: var(--m-primary-fixed); color: var(--m-primary); border: 0.5px solid rgba(0,88,188,0.20); }
+[data-theme="dark"] .vt-header__badge {
+    background: rgba(51, 65, 85, 0.72);
+    color: #e2e8f0;
+    border-color: rgba(148, 163, 184, 0.35);
+}
+
+/* === Buttons (Lumina pill + active scale) === */
+button[kind="primary"] {
+    background: linear-gradient(135deg, rgba(59,130,246,0.60), rgba(37,99,235,0.72)) !important;
+    border: 0.5px solid rgba(255,255,255,0.55) !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    border-radius: 14px !important;
+    box-shadow: 0 8px 22px rgba(37,99,235,0.20) !important;
+    transition: transform 140ms ease, filter 140ms ease, background-color 140ms ease !important;
+}
+button[kind="primary"]:hover { filter: brightness(1.08); }
+button[kind="primary"]:active { transform: scale(0.98); }
+[data-theme="dark"] button[kind="primary"] {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.84), rgba(51, 65, 85, 0.86)) !important;
+    border: 0.5px solid rgba(148, 163, 184, 0.52) !important;
+    color: #e2e8f0 !important;
+    box-shadow: 0 8px 18px rgba(2, 6, 23, 0.42) !important;
+}
+[data-theme="dark"] button[kind="primary"]:hover { filter: brightness(1.10); }
+button[kind="secondary"] {
+    background: rgba(0,0,0,0.05) !important;
+    border: 0.5px solid rgba(255,255,255,0.40) !important;
+    color: var(--text-primary) !important;
+    font-weight: 500 !important;
+    border-radius: 12px !important;
+    transition: transform 140ms ease, background-color 140ms ease !important;
+}
+button[kind="secondary"]:hover { background: rgba(0,0,0,0.10) !important; }
+button[kind="secondary"]:active { transform: scale(0.98); }
+[data-theme="dark"] button[kind="secondary"] { background: rgba(255,255,255,0.05) !important; border-color: rgba(255,255,255,0.10) !important; }
+[data-theme="dark"] button[kind="secondary"]:hover { background: rgba(255,255,255,0.10) !important; }
+
+/* === Inputs / selects (Lumina shadow-inner) === */
+input, textarea, [data-baseweb="select"] > div {
+    background-color: rgba(0,0,0,0.05) !important;
+    border: 0.5px solid rgba(255,255,255,0.40) !important;
+    border-radius: 10px !important;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.04) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="dark"] input, [data-theme="dark"] textarea, [data-theme="dark"] [data-baseweb="select"] > div {
+    background-color: rgba(255,255,255,0.05) !important;
+    border-color: rgba(255,255,255,0.10) !important;
+}
+input:focus, textarea:focus { border-color: var(--m-primary) !important; box-shadow: 0 0 0 1px var(--m-primary) !important; }
 button[key="stop_conversion_btn"], button[key="yt_stop_batch"] { background-color: #ff4b4b !important; color: white !important; }
 button[key="stop_conversion_btn"]:hover, button[key="yt_stop_batch"]:hover { background-color: #ff0000 !important; }
 button[key="stop_conversion_btn"]:disabled, button[key="yt_stop_batch"]:disabled { background-color: #cccccc !important; color: #666666 !important; }
-.stProgress > div > div > div > div { background: linear-gradient(90deg, #ff4b4b, #f97316); border-radius: 9999px; height: 0.5rem; }
-.stTabs [data-baseweb="tab-list"] { gap: 0; border-bottom: 2px solid var(--border-default); padding: 0 0.5rem; }
-.stTabs [data-baseweb="tab"] { height: 2.75rem; padding: 0 1.25rem; background-color: transparent; border: none; color: var(--text-secondary); font-weight: 500; font-size: 0.85rem; border-bottom: 2px solid transparent; margin-bottom: -2px; }
-.stTabs [data-baseweb="tab"]:hover { color: var(--text-primary); background-color: transparent; }
-.stTabs [aria-selected="true"] { color: var(--accent) !important; border-bottom-color: var(--accent) !important; font-weight: 700 !important; }
-button[data-baseweb="tab"]:nth-child(1)::before, button[data-baseweb="tab"]:nth-child(2)::before, button[data-baseweb="tab"]:nth-child(3)::before { content: ''; display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: middle; background-size: contain; background-repeat: no-repeat; }
-button[data-baseweb="tab"]:nth-child(1)::before { background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>'); }
-button[data-baseweb="tab"]:nth-child(2)::before { background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'); }
-button[data-baseweb="tab"]:nth-child(3)::before { background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>'); }
-[data-theme="dark"] button[data-baseweb="tab"]::before { filter: brightness(1.5); }
-button[data-baseweb="tab"]:nth-child(3)::after { content: 'NEW'; display: inline-block; font-size: 0.5rem; font-weight: 700; color: white; background: linear-gradient(135deg, #f59e0b, #d97706); padding: 0.08rem 0.3rem; border-radius: 0.2rem; margin-left: 6px; vertical-align: middle; }
-.st-key-theme_toggle { position: fixed !important; top: 0.75rem; right: 3.5rem; z-index: 999998; }
-.st-key-theme_toggle button { background-color: var(--bg-secondary) !important; border: 1px solid var(--border-default) !important; border-radius: 0.375rem !important; padding: 0.25rem 0.5rem !important; font-size: 1.1rem !important; }
-.st-key-theme_toggle button:hover { background-color: var(--bg-tertiary) !important; }
-.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) { display: flex !important; align-items: center !important; min-height: 2.75rem !important; border-bottom: 1px solid var(--border-default); }
-.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox):hover { background-color: var(--bg-tertiary) !important; }
-.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) > div[data-testid="column"] { display: flex !important; align-items: center !important; }
-.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) p { margin: 0 !important; padding: 0 !important; line-height: 2rem !important; font-size: 0.85rem !important; }
-.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) .stCheckbox { margin: 0 !important; padding: 0 !important; }
-.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) { display: flex !important; align-items: flex-start !important; padding: 0.5rem 0 !important; border-bottom: 1px solid var(--border-default); }
-.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox):hover { background-color: var(--bg-tertiary) !important; }
-.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) > div[data-testid="column"] { display: flex !important; align-items: flex-start !important; }
-.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) .stCheckbox { margin: 0 !important; padding: 0 !important; }
-.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) p { margin: 0 !important; padding: 0 !important; }
-button[key="sort_name"], button[key="sort_size"], button[key="sort_date"] { border: none !important; background-color: transparent !important; box-shadow: none !important; outline: none !important; padding: 0.5rem !important; font-weight: 700 !important; font-size: 0.7rem !important; letter-spacing: 0.08em !important; text-transform: uppercase !important; color: var(--text-secondary) !important; }
-button[key="sort_name"]:hover, button[key="sort_size"]:hover, button[key="sort_date"]:hover { color: var(--accent) !important; }
-[data-testid="stExpander"] { border: 1px solid var(--border-default) !important; border-radius: 0.5rem !important; background: transparent !important; overflow: visible !important; }
-[data-testid="stExpander"] summary { font-size: 0.85rem !important; font-weight: 600 !important; color: var(--text-secondary) !important; padding: 0.75rem 1rem !important; }
+.stProgress > div > div > div > div { background: linear-gradient(90deg, var(--m-primary), var(--m-tertiary)); border-radius: 9999px; height: 6px; }
+/* === Tabs (Lumina underline-pill) === */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 0.5px solid var(--border-default); padding: 0; margin-bottom: 16px; }
+.stTabs [data-baseweb="tab"] {
+    height: 40px; padding: 0 16px;
+    background-color: transparent !important;
+    border: none !important;
+    color: var(--text-muted) !important;
+    font-weight: 500 !important; font-size: 14px !important; letter-spacing: -0.01em;
+    border-radius: 10px 10px 0 0 !important;
+    transition: all 200ms ease;
+}
+.stTabs [data-baseweb="tab"]:hover { color: var(--text-primary) !important; background: rgba(255,255,255,0.30) !important; }
+[data-theme="dark"] .stTabs [data-baseweb="tab"]:hover { background: rgba(255,255,255,0.05) !important; }
+.stTabs [aria-selected="true"] { color: var(--m-primary) !important; font-weight: 600 !important; border-bottom: 2px solid var(--m-primary) !important; }
+/* "NEW" badge on Mute Video tab */
+button[data-baseweb="tab"]:nth-child(3)::after { content: 'NEW'; display: inline-block; font-size: 9px; font-weight: 700; color: var(--m-on-primary); background: linear-gradient(135deg, var(--m-primary), var(--m-tertiary)); padding: 2px 6px; border-radius: 6px; margin-left: 6px; vertical-align: middle; letter-spacing: 0.05em; }
+
+/* Theme toggle button — moved into TopNav area */
+.st-key-theme_toggle { position: fixed !important; top: 14px; right: 16px; z-index: 1001; }
+.st-key-theme_toggle button { background: rgba(255,255,255,0.50) !important; border: 0.5px solid rgba(255,255,255,0.80) !important; border-radius: 9999px !important; padding: 6px 12px !important; font-size: 16px !important; box-shadow: 0 4px 12px rgba(0,0,0,0.06) !important; }
+.st-key-theme_toggle button:hover { background: rgba(255,255,255,0.70) !important; }
+[data-theme="dark"] .st-key-theme_toggle button { background: rgba(15,23,42,0.50) !important; border-color: rgba(255,255,255,0.10) !important; color: var(--text-primary) !important; }
+[data-theme="dark"] .st-key-theme_toggle button:hover { background: rgba(30,41,59,0.70) !important; }
+
+/* Queue rows (Lumina) */
+.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox), .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) {
+    display: flex !important; align-items: center !important;
+    min-height: 48px !important;
+    padding: 8px 12px !important;
+    border-radius: 12px !important;
+    border: 0.5px solid transparent !important;
+    transition: background 160ms ease, border-color 160ms ease !important;
+}
+.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox):hover, .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox):hover {
+    background: rgba(255,255,255,0.50) !important;
+    border-color: rgba(255,255,255,0.60) !important;
+}
+[data-theme="dark"] .st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox):hover, [data-theme="dark"] .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox):hover {
+    background: rgba(30,41,59,0.50) !important;
+    border-color: rgba(255,255,255,0.10) !important;
+}
+.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) > div[data-testid="column"], .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) > div[data-testid="column"] { display: flex !important; align-items: center !important; }
+.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) p, .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) p { margin: 0 !important; padding: 0 !important; line-height: 1.4 !important; font-size: 14px !important; }
+.st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) .stCheckbox, .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) .stCheckbox { margin: 0 !important; padding: 0 !important; }
+
+/* Sort buttons (Lumina label-caps) */
+button[key="sort_name"], button[key="sort_size"], button[key="sort_date"] { border: none !important; background: transparent !important; box-shadow: none !important; outline: none !important; padding: 8px 6px !important; font-weight: 700 !important; font-size: 12px !important; letter-spacing: 0.05em !important; text-transform: uppercase !important; color: var(--text-secondary) !important; border-radius: 8px !important; }
+button[key="sort_name"]:hover, button[key="sort_size"]:hover, button[key="sort_date"]:hover { color: var(--m-primary) !important; background: rgba(0,88,188,0.06) !important; }
+
+/* Expander */
+[data-testid="stExpander"] { border: 0.5px solid var(--border-default) !important; border-radius: 12px !important; background: rgba(255,255,255,0.30) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); overflow: visible !important; }
+[data-theme="dark"] [data-testid="stExpander"] { background: rgba(15,23,42,0.30) !important; }
+[data-testid="stExpander"] summary { font-size: 14px !important; font-weight: 600 !important; color: var(--text-secondary) !important; padding: 12px 16px !important; }
+[data-theme="dark"] [data-testid="stExpander"] summary {
+    background: rgba(15,23,42,0.68) !important;
+    color: #cbd5e1 !important;
+    border-radius: 10px !important;
+}
+[data-theme="dark"] [data-testid="stExpander"] summary p,
+[data-theme="dark"] [data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] p {
+    color: #cbd5e1 !important;
+}
 [data-testid="stExpander"] summary::-webkit-details-marker { display: none !important; }
 [data-testid="stExpander"] summary::marker { content: '' !important; }
-.feature-box { background-color: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.5rem; padding: 1rem; }
-div[data-testid="stHorizontalBlock"] { gap: 0.5rem; }
+[data-testid="stExpander"] summary > span { display: flex !important; align-items: center !important; gap: 8px !important; width: 100% !important; }
+[data-testid="stExpander"] summary > span > div { flex: 1 !important; min-width: 0 !important; }
+[data-testid="stExpander"] summary p { margin: 0 !important; line-height: 1.35 !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }
+[data-testid="stExpander"] summary [data-testid="stIconMaterial"] { display: none !important; }
+[data-testid="stExpander"] summary > span > span { display: none !important; }
+
+.feature-box { background: var(--glass-bg); border: 0.5px solid var(--glass-border); border-radius: 12px; padding: 16px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+div[data-testid="stHorizontalBlock"] { gap: 8px; }
+
 /* Scrollable queue panels - config stays visible */
 .st-key-queue_panel > div, .st-key-yt_queue_panel > div { max-height: 65vh; overflow-y: auto; }
-/* YT save location panel */
-.st-key-yt_save_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 1rem; margin-top: 0.5rem; box-shadow: var(--card-shadow); }
+.st-key-yt_save_panel > div { padding: 16px; margin-top: 8px; }
 /* Fix expander text overlap */
-[data-testid="stExpander"] summary > span { display: flex !important; align-items: center !important; width: 100% !important; }
-[data-testid="stExpander"] summary > span > div { flex: 1 !important; min-width: 0 !important; }
-[data-testid="stExpander"] summary p { margin: 0 !important; line-height: 1.5 !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
 [data-testid="stExpanderDetails"] > div { padding: 0.5rem 0 !important; }
+[data-theme="dark"] .st-key-mute_card [data-baseweb="input"] > div,
+[data-theme="dark"] .st-key-mute_card [data-baseweb="base-input"],
+[data-theme="dark"] .st-key-mute_card input {
+    background: rgba(15, 23, 42, 0.78) !important;
+    border-color: rgba(148, 163, 184, 0.40) !important;
+    color: #e2e8f0 !important;
+}
+.vt-chip-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.25rem; }
+.vt-chip { display: inline-flex; align-items: center; padding: 0.1rem 0.4rem; border-radius: 9999px; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.01em; border: 1px solid var(--border-default); background: var(--bg-tertiary); color: var(--text-secondary); }
+.vt-chip--accent { border-color: rgba(88, 166, 255, 0.35); color: var(--info); background: rgba(88, 166, 255, 0.12); }
+.vt-chip--warn { border-color: rgba(210, 153, 34, 0.35); color: var(--warning); background: rgba(210, 153, 34, 0.12); }
+.vt-chip--mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important; font-size: 0.62rem; }
+/* old tab-hero variant block removed (unified to glass) */
+.vt-kbd { display: inline-flex; align-items: center; padding: 0.08rem 0.32rem; border-radius: 0.35rem; border: 1px solid var(--border-default); background: var(--bg-tertiary); font-size: 0.68rem; }
+/* === Chips / pills (Lumina format-conversion style) === */
+.vt-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; align-items: center; }
+.vt-chip { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; letter-spacing: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important; background: rgba(0,0,0,0.05); color: var(--text-secondary); border: 0.5px solid var(--border-default); }
+.vt-chip--accent { background: rgba(0,88,188,0.10); color: var(--m-primary); border-color: rgba(0,88,188,0.20); }
+.vt-chip--tertiary { background: rgba(138,43,185,0.10); color: var(--m-tertiary); border-color: rgba(138,43,185,0.20); }
+.vt-chip--warn { background: rgba(210,153,34,0.10); color: var(--warning); border-color: rgba(210,153,34,0.25); }
+.vt-chip--mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important; }
+.vt-chip-arrow { color: var(--text-muted); font-size: 14px; }
+
+/* === Tab hero banner (kept, restyled to Lumina) === */
+.vt-tab-hero { border-radius: 16px; padding: 16px 20px; margin-bottom: 16px; border: 0.5px solid var(--glass-border); background: var(--glass-bg); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); box-shadow: var(--card-shadow); }
+.vt-tab-hero__title { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--text-primary); }
+.vt-tab-hero__sub { margin: 4px 0 0; font-size: 13px; color: var(--text-secondary); }
+.vt-tab-hero--light, .vt-tab-hero--dark { /* unified now */ }
+.vt-kbd { display: inline-flex; align-items: center; padding: 2px 6px; border-radius: 6px; border: 0.5px solid var(--border-default); background: rgba(0,0,0,0.05); font-size: 11px; font-family: ui-monospace, monospace; color: var(--text-secondary); }
+
+/* keep mute card centered */
+.st-key-mute_card > div { max-width: 760px; margin: 0 auto; }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
 # 공통 함수들
@@ -1404,26 +1715,44 @@ if st.button(theme_icon, key="theme_toggle", help="Toggle Light/Dark Mode"):
 if st.session_state.get('conversion_running', False) or st.session_state.get('yt_download_running', False):
     st.warning("⚠️ **Conversion/Download in progress.** Please do not switch tabs or refresh the page until it's complete.")
 
-# 메인 헤더
-st.markdown('''
-<div class="vt-header">
-    <h1 class="vt-header__title">🎥 Video Tool v6.0</h1>
-    <p class="vt-header__subtitle">Video Conversion &bull; YouTube Download &bull; Mute Video</p>
-    <div class="vt-header__badges">
-        <span class="vt-header__badge" style="background: linear-gradient(135deg, #3b82f6, #2563eb);">CRF MODE</span>
-        <span class="vt-header__badge" style="background: linear-gradient(135deg, #10b981, #059669);">HW ACCEL</span>
-        <span class="vt-header__badge" style="background: linear-gradient(135deg, #f59e0b, #d97706);">MUTE VIDEO</span>
-        <span class="vt-header__badge" style="background: linear-gradient(135deg, #ef4444, #dc2626);">AUTO UPDATE</span>
+# Lumina TopNavBar (decorative — Streamlit tabs handle real navigation)
+st.html(f'''
+<div class="vt-topnav">
+    <div class="vt-topnav__brand">
+        <span class="vt-topnav__brand-mark"><span class="vt-topnav__logo-emoji">🎥</span></span>
+        <span>{APP_NAME}</span>
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.04em;color:var(--text-secondary);padding:3px 8px;border-radius:9999px;background:var(--glass-bg-strong);border:0.5px solid var(--glass-border);margin-left:4px;">v{APP_VERSION}</span>
     </div>
 </div>
-''', unsafe_allow_html=True)
+''')
+
+# 페이지 내 섹션 헤더 (Lumina headline)
+st.html('''
+<div class="vt-header">
+    <div>
+        <h1 class="vt-header__title">Video Workspace</h1>
+        <p class="vt-header__subtitle">Convert local files, download from YouTube, or mute clips — all in one place.</p>
+    </div>
+    <div class="vt-header__badges">
+        <span class="vt-header__badge">CRF MODE</span>
+        <span class="vt-header__badge">HW ACCEL</span>
+        <span class="vt-header__badge">AUTO UPDATE</span>
+    </div>
+</div>
+''')
 
 # 탭 생성
-tab1, tab2, tab3 = st.tabs(["Video Conversion", "YouTube Download", "Mute Video"])
+tab1, tab2, tab3 = st.tabs(["🎬 Video Conversion", "📥 YouTube Download", "🔇 Mute Video"])
 
 
 # Tab 1: Local File Conversion
 with tab1:
+    st.html("""
+    <div class="vt-tab-hero">
+        <p class="vt-tab-hero__title">Local Conversion Workspace</p>
+        <p class="vt-tab-hero__sub">폴더/파일 선택 → 정렬/선택 → 일괄 변환 흐름으로 작동합니다.</p>
+    </div>
+    """)
     # Option dictionaries (defined at tab scope for Tab 2 reuse)
     codec_options = {
         "h264": "H.264 - Universal",
@@ -1466,15 +1795,26 @@ with tab1:
     _files = st.session_state['video_files_list']
     _sel_count = sum(1 for f in _files if st.session_state['file_selection_state'].get(f, True)) if _files else 0
     _total_mb = sum(os.path.getsize(f) / (1024*1024) for f in _files if os.path.exists(f)) if _files else 0
-    _total_display = f"{_total_mb:.1f} MB" if _total_mb < 1024 else f"{_total_mb/1024:.1f} GB"
-    st.markdown(f'''
+    if _total_mb < 1024:
+        _size_num, _size_unit = f"{_total_mb:.1f}", "MB"
+    else:
+        _size_num, _size_unit = f"{_total_mb/1024:.1f}", "GB"
+    st.html(f'''
     <div class="vt-stats-row">
-        <div class="vt-stats-card"><div class="vt-stats-card__label">QUEUE TOTAL</div><div class="vt-stats-card__value">{len(_files)}</div></div>
-        <div class="vt-stats-card"><div class="vt-stats-card__label">SELECTED</div><div class="vt-stats-card__value vt-stats-card__value--accent">{_sel_count}</div></div>
-        <div class="vt-stats-card"><div class="vt-stats-card__label">TOTAL SIZE</div><div class="vt-stats-card__value">{_total_display}</div></div>
-        <div class="vt-stats-card"><div class="vt-stats-card__label">EST. DURATION</div><div class="vt-stats-card__value">--</div></div>
+        <div class="vt-stats-card">
+            <div class="vt-stats-card__head"><span class="material-symbols-outlined">queue_play_next</span><span class="vt-stats-card__label">Queue Total</span></div>
+            <div class="vt-stats-card__value">{len(_files)}<span class="vt-stats-card__unit">Files</span></div>
+        </div>
+        <div class="vt-stats-card">
+            <div class="vt-stats-card__head"><span class="material-symbols-outlined">check_circle</span><span class="vt-stats-card__label">Selected</span></div>
+            <div class="vt-stats-card__value vt-stats-card__value--accent">{_sel_count}<span class="vt-stats-card__unit">Ready</span></div>
+        </div>
+        <div class="vt-stats-card">
+            <div class="vt-stats-card__head"><span class="material-symbols-outlined">data_usage</span><span class="vt-stats-card__label">Total Size</span></div>
+            <div class="vt-stats-card__value">{_size_num}<span class="vt-stats-card__unit">{_size_unit}</span></div>
+        </div>
     </div>
-    ''', unsafe_allow_html=True)
+    ''')
 
     # --- Pre-init variables ---
     selected_files = []
@@ -1688,28 +2028,46 @@ with tab1:
     _codec_display = selected_codec.upper()
     _res_display = selected_resolution.upper() if selected_resolution != "original" else "ORIGINAL"
     _quality_display = selected_quality.upper()
-    st.markdown(f'''
+    _selected_count = len(selected_files)
+    _run_state = "RUNNING" if st.session_state.get('conversion_running', False) else "IDLE"
+    st.html(f'''
     <div class="vt-status-bar">
-        <span>CODEC: <strong>{_codec_display}</strong></span>
-        <span style="color: var(--border-default);">|</span>
-        <span>RES: <strong>{_res_display}</strong></span>
-        <span style="color: var(--border-default);">|</span>
-        <span>QUALITY: <strong>{_quality_display}</strong></span>
+        <div class="vt-status-bar__group">
+            <span>State: <strong>{_run_state}</strong></span>
+            <span>Selected: <strong>{_selected_count}</strong></span>
+        </div>
+        <div class="vt-status-bar__group">
+            <span>Codec: <strong>{_codec_display}</strong></span>
+            <span>Res: <strong>{_res_display}</strong></span>
+            <span>Quality: <strong>{_quality_display}</strong></span>
+        </div>
     </div>
-    ''', unsafe_allow_html=True)
+    ''')
 
 
 # 탭 2: 유튜브 다운로더
 with tab2:
+    st.html("""
+    <div class="vt-tab-hero">
+        <p class="vt-tab-hero__title">YouTube Queue Console</p>
+        <p class="vt-tab-hero__sub">URL을 추가하고 큐를 선택해 일괄 실행하세요. <span class="vt-kbd">Queue</span> <span class="vt-kbd">Batch</span></p>
+    </div>
+    """)
     # Stats cards
     _yt_queue = st.session_state['yt_queue']
     _yt_sel = sum(1 for item in _yt_queue if st.session_state['yt_queue_selection'].get(item['url'], True)) if _yt_queue else 0
-    st.markdown(f'''
+    st.html(f'''
     <div class="vt-stats-row">
-        <div class="vt-stats-card"><div class="vt-stats-card__label">QUEUE TOTAL</div><div class="vt-stats-card__value">{len(_yt_queue)}</div></div>
-        <div class="vt-stats-card"><div class="vt-stats-card__label">SELECTED</div><div class="vt-stats-card__value vt-stats-card__value--accent">{_yt_sel}</div></div>
+        <div class="vt-stats-card">
+            <div class="vt-stats-card__head"><span class="material-symbols-outlined">playlist_play</span><span class="vt-stats-card__label">Queue Total</span></div>
+            <div class="vt-stats-card__value">{len(_yt_queue)}<span class="vt-stats-card__unit">Items</span></div>
+        </div>
+        <div class="vt-stats-card">
+            <div class="vt-stats-card__head"><span class="material-symbols-outlined">check_circle</span><span class="vt-stats-card__label">Selected</span></div>
+            <div class="vt-stats-card__value vt-stats-card__value--accent">{_yt_sel}<span class="vt-stats-card__unit">Ready</span></div>
+        </div>
     </div>
-    ''', unsafe_allow_html=True)
+    ''')
 
     # Pre-init variables
     download_now_btn = False
@@ -1901,11 +2259,21 @@ with tab2:
                         if info_parts:
                             st.markdown(f'<p style="font-size:0.8rem;color:var(--text-secondary);margin:0;">{" | ".join(info_parts)}</p>', unsafe_allow_html=True)
                         if settings['download_only']:
-                            st.markdown('<p style="font-size:0.75rem;color:var(--text-muted);margin:0;">Download Only</p>', unsafe_allow_html=True)
+                            st.markdown(
+                                '<div class="vt-chip-row"><span class="vt-chip vt-chip--warn">DOWNLOAD ONLY</span></div>',
+                                unsafe_allow_html=True
+                            )
                         else:
                             codec_name = codec_options[settings['codec']].split(' - ')[0]
                             res_name = resolution_options[settings['resolution']]
-                            st.markdown(f'<p style="font-size:0.75rem;color:var(--text-muted);margin:0;">Convert: {codec_name}, {res_name}</p>', unsafe_allow_html=True)
+                            st.markdown(
+                                f'<div class="vt-chip-row">'
+                                f'<span class="vt-chip vt-chip--accent">CONVERT</span>'
+                                f'<span class="vt-chip vt-chip--mono">{codec_name}</span>'
+                                f'<span class="vt-chip vt-chip--mono">{res_name}</span>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
                     with col_remove:
                         if st.button("✕", key=f"yt_remove_{idx}", help="Remove"):
                             items_to_remove.append(idx)
@@ -1977,8 +2345,14 @@ with tab2:
 
 # Tab 3: Mute Video (무음 비디오 생성)
 with tab3:
+    st.html("""
+    <div class="vt-tab-hero">
+        <p class="vt-tab-hero__title">Mute Track Utility</p>
+        <p class="vt-tab-hero__sub">URL/로컬 입력 후 오디오 트랙만 제거해 빠르게 무음 비디오를 생성합니다.</p>
+    </div>
+    """)
     with st.container(key="mute_card"):
-        st.markdown('''
+        st.html('''
         <h3 style="font-size: 1.17em; margin-bottom: 0.5rem;">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: middle; margin-right: 8px;">
                 <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
@@ -1987,9 +2361,9 @@ with tab3:
             </svg>
             Mute Video Generator
         </h3>
-        ''', unsafe_allow_html=True)
+        ''')
 
-        st.markdown('''
+        st.html('''
         <div class="feature-box" style="margin-bottom: 1.5rem;">
             <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
                 <span style="font-size: 1.5rem; line-height: 1;">🔇</span>
@@ -2003,7 +2377,7 @@ with tab3:
                 </div>
             </div>
         </div>
-        ''', unsafe_allow_html=True)
+        ''')
 
         mute_input = st.text_input(
             "Video URL or local file path:",
@@ -2025,12 +2399,12 @@ with tab3:
         mute_output_name = st.text_input("Output filename:", value=default_output_name, key="mute_output_name")
 
         default_save_path = os.path.join(os.path.expanduser("~"), "Downloads")
-        st.markdown(f'''
+        st.html(f'''
         <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; padding: 0.5rem 0.75rem; background-color: var(--bg-tertiary); border-radius: 0.375rem;">
             <span style="font-size: 0.85rem;">📁</span>
             <span style="font-size: 0.8rem; color: var(--text-secondary);">Save to: <b>{default_save_path}</b></span>
         </div>
-        ''', unsafe_allow_html=True)
+        ''')
 
         if st.button("🔇 Generate Muted Video", type="primary", key="mute_generate_btn",
                      disabled=not mute_input, use_container_width=True):
@@ -2061,11 +2435,11 @@ with tab3:
 
 # 푸터
 st.markdown("---")
-st.markdown("""
+st.html(f"""
 <div style="text-align: center; color: var(--text-secondary); padding: 2rem;">
-    <p>🎥 Video Tool v6.0 - Made by Channy</p>
+    <p>🎥 {APP_NAME} v{APP_VERSION} - Made by Channy</p>
     <p>Video conversion tool with batch YouTube download support.</p>
 </div>
-""", unsafe_allow_html=True)
+""")
 
 

@@ -641,9 +641,13 @@ class YouTubeDownloader:
             except subprocess.TimeoutExpired:
                 self.download_process.kill()
 
+# 앱 메타 정보
+APP_NAME = "Video Tool"
+APP_VERSION = "6.0.3"
+
 # 페이지 설정
 st.set_page_config(
-    page_title="Video Tool v6.0",
+    page_title=f"{APP_NAME} v{APP_VERSION}",
     page_icon="🎥",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -686,6 +690,10 @@ st.markdown("""
     --accent: #ff4b4b; --accent-hover: #e03e3e;
     --success: #2ea043; --warning: #d29922; --info: #58a6ff;
     --card-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    --glass-bg: rgba(255, 255, 255, 0.62);
+    --glass-bg-strong: rgba(255, 255, 255, 0.78);
+    --glass-border: rgba(255, 255, 255, 0.72);
+    --glass-shadow: 0 10px 34px rgba(15, 23, 42, 0.08);
 }
 [data-theme="dark"] {
     --bg-primary: #0d1117; --bg-secondary: #161b22; --bg-tertiary: #21262d; --bg-input: #0d1117;
@@ -694,17 +702,66 @@ st.markdown("""
     --accent: #ff6b6b; --accent-hover: #ff4b4b;
     --success: #3fb950; --warning: #d29922; --info: #58a6ff;
     --card-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    --glass-bg: rgba(15, 23, 42, 0.46);
+    --glass-bg-strong: rgba(15, 23, 42, 0.72);
+    --glass-border: rgba(148, 163, 184, 0.24);
+    --glass-shadow: 0 10px 34px rgba(2, 6, 23, 0.38);
 }
 * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
 [data-testid="stIconMaterial"], .material-symbols-rounded { font-family: 'Material Symbols Rounded' !important; }
-.stApp { background-color: var(--bg-primary) !important; }
-.stApp > header { height: 0rem; background-color: var(--bg-primary) !important; }
-header[data-testid="stHeader"] { background-color: var(--bg-primary) !important; }
-[data-theme="dark"] header[data-testid="stHeader"] { background-color: #0d1117 !important; }
-.main .block-container { padding-top: 1rem; padding-bottom: 3.5rem; padding-left: 2rem; padding-right: 2rem; max-width: 100%; }
+.stApp {
+    background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 45%, #eef2ff 100%) !important;
+    position: relative;
+    isolation: isolate;
+    overflow-x: hidden;
+}
+[data-theme="dark"] .stApp {
+    background: #020617 !important;
+}
+.stApp::before {
+    content: "";
+    position: fixed;
+    inset: -10% -10% auto auto;
+    width: 46vw;
+    height: 42vh;
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(59,130,246,0.22), rgba(59,130,246,0));
+    filter: blur(34px);
+    pointer-events: none;
+    z-index: -2;
+}
+.stApp::after {
+    content: "";
+    position: fixed;
+    inset: auto auto -14% -10%;
+    width: 54vw;
+    height: 45vh;
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(147,197,253,0.24), rgba(147,197,253,0));
+    filter: blur(40px);
+    pointer-events: none;
+    z-index: -2;
+}
+[data-theme="dark"] .stApp::before {
+    background: radial-gradient(circle, rgba(59,130,246,0.18), rgba(59,130,246,0));
+}
+[data-theme="dark"] .stApp::after {
+    background: radial-gradient(circle, rgba(168,85,247,0.16), rgba(168,85,247,0));
+}
+.stApp > header { height: 0rem; background-color: transparent !important; }
+header[data-testid="stHeader"] { background-color: transparent !important; }
+.main .block-container {
+    position: relative;
+    z-index: 1;
+    padding-top: 1rem;
+    padding-bottom: 3.5rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
+    max-width: 100%;
+}
 footer { visibility: hidden !important; }
 .stAppDeployButton, button[data-testid="stAppDeployButton"] { display: none !important; }
-[data-testid="stMainMenu"] { display: block !important; visibility: visible !important; opacity: 1 !important; position: fixed !important; top: 0.75rem !important; right: 1rem !important; z-index: 999999 !important; }
+[data-testid="stMainMenu"] { display: none !important; visibility: hidden !important; opacity: 0 !important; }
 [data-theme="dark"] p, [data-theme="dark"] span, [data-theme="dark"] label, [data-theme="dark"] h1, [data-theme="dark"] h2, [data-theme="dark"] h3, [data-theme="dark"] h4, [data-theme="dark"] h5, [data-theme="dark"] h6, [data-theme="dark"] div, [data-theme="dark"] li, [data-theme="dark"] td, [data-theme="dark"] th { color: var(--text-primary) !important; }
 [data-theme="dark"] .stMarkdown, [data-theme="dark"] .stMarkdown p, [data-theme="dark"] [data-testid="stMarkdownContainer"] p { color: var(--text-primary) !important; }
 [data-theme="dark"] .element-container { color: var(--text-primary) !important; }
@@ -723,23 +780,41 @@ footer { visibility: hidden !important; }
 [data-theme="dark"] [data-testid="stCheckbox"] label { color: var(--text-primary) !important; }
 [data-theme="dark"] [data-testid="stTabContent"] { background-color: var(--bg-primary) !important; }
 [data-theme="dark"] [data-testid="stExpander"] { background-color: var(--bg-secondary) !important; border-color: var(--border-default) !important; }
+[data-theme="dark"] [data-testid="stExpander"] summary {
+    background: rgba(15,23,42,0.68) !important;
+    color: #cbd5e1 !important;
+    border-radius: 10px !important;
+}
+[data-theme="dark"] [data-testid="stExpander"] summary p,
+[data-theme="dark"] [data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] p {
+    color: #cbd5e1 !important;
+}
 [data-theme="dark"] [data-testid="stExpanderDetails"] { background-color: var(--bg-tertiary) !important; }
 [data-theme="dark"] [data-testid="stAlert"] { background-color: var(--bg-secondary) !important; color: var(--text-primary) !important; }
 [data-theme="dark"] code { background-color: var(--bg-tertiary) !important; color: var(--text-primary) !important; }
 [data-theme="dark"] pre { background-color: var(--bg-tertiary) !important; border-color: var(--border-default) !important; }
 [data-theme="dark"] hr { border-color: var(--border-default) !important; }
-.st-key-config_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-left: 4px solid var(--border-accent); border-radius: 0.75rem; padding: 1.25rem; box-shadow: var(--card-shadow); }
-.st-key-file_source > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 1rem; margin-top: 1rem; box-shadow: var(--card-shadow); }
-.st-key-queue_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 1.25rem; box-shadow: var(--card-shadow); }
-.st-key-mute_card > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-left: 4px solid var(--border-accent); border-radius: 0.75rem; padding: 1.5rem; box-shadow: var(--card-shadow); max-width: 700px; margin: 0 auto; }
-.st-key-yt_config_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-left: 4px solid var(--border-accent); border-radius: 0.75rem; padding: 1.25rem; box-shadow: var(--card-shadow); }
-.st-key-yt_queue_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 1.25rem; box-shadow: var(--card-shadow); }
+.st-key-config_panel > div, .st-key-file_source > div, .st-key-queue_panel > div, .st-key-mute_card > div, .st-key-yt_config_panel > div, .st-key-yt_queue_panel > div, .st-key-yt_save_panel > div {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 1.5rem;
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(24px) saturate(165%);
+    -webkit-backdrop-filter: blur(24px) saturate(165%);
+}
+.st-key-config_panel > div, .st-key-yt_config_panel > div { border-left: 4px solid var(--border-accent); padding: 1.25rem; }
+.st-key-file_source > div { padding: 1rem; margin-top: 1rem; }
+.st-key-queue_panel > div, .st-key-yt_queue_panel > div { padding: 1.25rem; }
+.st-key-mute_card > div { padding: 1.5rem; max-width: 700px; margin: 0 auto; }
 .vt-section-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 0.75rem; }
 .vt-stats-row { display: flex; gap: 0.75rem; margin-bottom: 1.25rem; }
-.vt-stats-card { flex: 1; background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 0.85rem 1rem; text-align: center; box-shadow: var(--card-shadow); }
+.vt-stats-card { flex: 1; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 1.25rem; padding: 0.85rem 1rem; text-align: center; box-shadow: var(--glass-shadow); backdrop-filter: blur(18px) saturate(150%); -webkit-backdrop-filter: blur(18px) saturate(150%); }
 .vt-stats-card__label { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.25rem; }
 .vt-stats-card__value { font-size: 1.3rem; font-weight: 700; color: var(--text-primary); }
 .vt-stats-card__value--accent { color: var(--accent); }
+.vt-stats-row--yt .vt-stats-card { background: rgba(15, 23, 42, 0.72); border-color: rgba(148, 163, 184, 0.24); box-shadow: 0 10px 30px rgba(2, 6, 23, 0.35); }
+.vt-stats-row--yt .vt-stats-card__label { color: #94a3b8; }
+.vt-stats-row--yt .vt-stats-card__value { color: #e2e8f0; }
 .vt-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
 .vt-badge--ready { background: rgba(46,160,67,0.15); color: var(--success); border: 1px solid rgba(46,160,67,0.3); }
 .vt-badge--pending { background: rgba(210,153,34,0.15); color: var(--warning); border: 1px solid rgba(210,153,34,0.3); }
@@ -751,10 +826,19 @@ footer { visibility: hidden !important; }
 .vt-header__subtitle { color: var(--text-secondary); font-size: 0.8rem; font-weight: 500; margin-top: 0.25rem; }
 .vt-header__badges { display: flex; justify-content: center; gap: 0.4rem; margin-top: 0.6rem; flex-wrap: wrap; }
 .vt-header__badge { color: white; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.05em; }
-button[kind="primary"] { background-color: var(--accent) !important; border-color: var(--accent) !important; color: white !important; font-weight: 600 !important; border-radius: 0.5rem !important; }
-button[kind="primary"]:hover { background-color: var(--accent-hover) !important; }
-button[kind="secondary"] { background-color: var(--bg-secondary) !important; border: 1px solid var(--border-default) !important; color: var(--text-primary) !important; font-weight: 500 !important; border-radius: 0.5rem !important; }
+[data-theme="dark"] .vt-header__badge { color: #e2e8f0 !important; text-shadow: none !important; }
+button[kind="primary"] { background: linear-gradient(135deg, rgba(37,99,235,0.88), rgba(59,130,246,0.88)) !important; border: 0.5px solid rgba(255,255,255,0.42) !important; color: #ffffff !important; font-weight: 600 !important; border-radius: 14px !important; box-shadow: 0 8px 20px rgba(37,99,235,0.25) !important; transition: transform 140ms ease, filter 140ms ease !important; }
+button[kind="primary"]:hover { transform: scale(1.03); filter: brightness(1.08); }
+[data-theme="dark"] button[kind="primary"] {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.84), rgba(51, 65, 85, 0.86)) !important;
+    border: 0.5px solid rgba(148, 163, 184, 0.45) !important;
+    color: #e2e8f0 !important;
+    box-shadow: 0 8px 18px rgba(2, 6, 23, 0.42) !important;
+}
+[data-theme="dark"] button[kind="primary"]:hover { filter: brightness(1.10); }
+button[kind="secondary"] { background-color: var(--glass-bg) !important; border: 1px solid var(--glass-border) !important; color: var(--text-primary) !important; font-weight: 500 !important; border-radius: 1rem !important; transition: transform 140ms ease, background-color 140ms ease !important; }
 button[kind="secondary"]:hover { background-color: var(--bg-tertiary) !important; }
+button[kind="secondary"]:hover { transform: scale(1.02); }
 button[key="stop_conversion_btn"], button[key="yt_stop_batch"] { background-color: #ff4b4b !important; color: white !important; }
 button[key="stop_conversion_btn"]:hover, button[key="yt_stop_batch"]:hover { background-color: #ff0000 !important; }
 button[key="stop_conversion_btn"]:disabled, button[key="yt_stop_batch"]:disabled { background-color: #cccccc !important; color: #666666 !important; }
@@ -769,7 +853,7 @@ button[data-baseweb="tab"]:nth-child(2)::before { background-image: url('data:im
 button[data-baseweb="tab"]:nth-child(3)::before { background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>'); }
 [data-theme="dark"] button[data-baseweb="tab"]::before { filter: brightness(1.5); }
 button[data-baseweb="tab"]:nth-child(3)::after { content: 'NEW'; display: inline-block; font-size: 0.5rem; font-weight: 700; color: white; background: linear-gradient(135deg, #f59e0b, #d97706); padding: 0.08rem 0.3rem; border-radius: 0.2rem; margin-left: 6px; vertical-align: middle; }
-.st-key-theme_toggle { position: fixed !important; top: 0.75rem; right: 3.5rem; z-index: 999998; }
+.st-key-theme_toggle { position: fixed !important; top: 0.75rem; right: 1rem; z-index: 999998; }
 .st-key-theme_toggle button { background-color: var(--bg-secondary) !important; border: 1px solid var(--border-default) !important; border-radius: 0.375rem !important; padding: 0.25rem 0.5rem !important; font-size: 1.1rem !important; }
 .st-key-theme_toggle button:hover { background-color: var(--bg-tertiary) !important; }
 .st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) { display: flex !important; align-items: center !important; min-height: 2.75rem !important; border-bottom: 1px solid var(--border-default); }
@@ -777,8 +861,8 @@ button[data-baseweb="tab"]:nth-child(3)::after { content: 'NEW'; display: inline
 .st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) > div[data-testid="column"] { display: flex !important; align-items: center !important; }
 .st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) p { margin: 0 !important; padding: 0 !important; line-height: 2rem !important; font-size: 0.85rem !important; }
 .st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) .stCheckbox { margin: 0 !important; padding: 0 !important; }
-.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) { display: flex !important; align-items: flex-start !important; padding: 0.5rem 0 !important; border-bottom: 1px solid var(--border-default); }
-.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox):hover { background-color: var(--bg-tertiary) !important; }
+.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) { display: flex !important; align-items: flex-start !important; padding: 0.5rem 0 !important; border-bottom: 1px solid rgba(148, 163, 184, 0.2); }
+.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox):hover { background-color: rgba(30, 41, 59, 0.48) !important; }
 .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) > div[data-testid="column"] { display: flex !important; align-items: flex-start !important; }
 .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) .stCheckbox { margin: 0 !important; padding: 0 !important; }
 .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) p { margin: 0 !important; padding: 0 !important; }
@@ -793,12 +877,71 @@ div[data-testid="stHorizontalBlock"] { gap: 0.5rem; }
 /* Scrollable queue panels - config stays visible */
 .st-key-queue_panel > div, .st-key-yt_queue_panel > div { max-height: 65vh; overflow-y: auto; }
 /* YT save location panel */
-.st-key-yt_save_panel > div { background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 0.75rem; padding: 1rem; margin-top: 0.5rem; box-shadow: var(--card-shadow); }
+.st-key-yt_save_panel > div { border-radius: 1.5rem; padding: 1rem; margin-top: 0.5rem; }
 /* Fix expander text overlap */
-[data-testid="stExpander"] summary > span { display: flex !important; align-items: center !important; width: 100% !important; }
+[data-testid="stExpander"] summary > span { display: flex !important; align-items: center !important; gap: 8px !important; width: 100% !important; }
 [data-testid="stExpander"] summary > span > div { flex: 1 !important; min-width: 0 !important; }
-[data-testid="stExpander"] summary p { margin: 0 !important; line-height: 1.5 !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+[data-testid="stExpander"] summary p { margin: 0 !important; line-height: 1.35 !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }
+[data-testid="stExpander"] summary [data-testid="stIconMaterial"] { display: none !important; }
+[data-testid="stExpander"] summary > span > span { display: none !important; }
 [data-testid="stExpanderDetails"] > div { padding: 0.5rem 0 !important; }
+.vt-chip-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.25rem; }
+.vt-chip { display: inline-flex; align-items: center; padding: 0.1rem 0.4rem; border-radius: 9999px; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.01em; border: 1px solid var(--border-default); background: var(--bg-tertiary); color: var(--text-secondary); }
+.vt-chip--accent { border-color: rgba(88, 166, 255, 0.35); color: var(--info); background: rgba(88, 166, 255, 0.12); }
+.vt-chip--warn { border-color: rgba(210, 153, 34, 0.35); color: var(--warning); background: rgba(210, 153, 34, 0.12); }
+.vt-chip--mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important; font-size: 0.62rem; }
+.vt-tab-hero { border-radius: 0.9rem; padding: 0.95rem 1.1rem; margin-bottom: 0.85rem; border: 1px solid var(--border-default); box-shadow: var(--card-shadow); }
+.vt-tab-hero__title { margin: 0; font-size: 0.98rem; font-weight: 700; letter-spacing: -0.01em; }
+.vt-tab-hero__sub { margin: 0.25rem 0 0; font-size: 0.78rem; color: var(--text-secondary); }
+.vt-tab-hero--light { background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,250,252,0.9)); }
+.vt-tab-hero--dark { background: linear-gradient(135deg, rgba(15,23,42,0.78), rgba(2,6,23,0.92)); border-color: rgba(255,255,255,0.12); }
+.vt-tab-hero--dark .vt-tab-hero__title { color: #e2e8f0; }
+.vt-tab-hero--dark .vt-tab-hero__sub { color: #94a3b8; }
+.vt-tab-hero--dark .vt-kbd { background: rgba(30,41,59,0.9); border-color: rgba(148,163,184,0.35); color: #cbd5e1; }
+.vt-kbd { display: inline-flex; align-items: center; padding: 0.08rem 0.32rem; border-radius: 0.35rem; border: 1px solid var(--border-default); background: var(--bg-tertiary); font-size: 0.68rem; }
+.st-key-yt_config_panel > div, .st-key-yt_queue_panel > div, .st-key-yt_save_panel > div {
+    background: linear-gradient(180deg, rgba(15,23,42,0.86), rgba(2,6,23,0.94));
+    border-color: rgba(148,163,184,0.28);
+    box-shadow: 0 10px 34px rgba(2, 6, 23, 0.35);
+}
+.st-key-yt_config_panel p, .st-key-yt_queue_panel p, .st-key-yt_save_panel p, .st-key-yt_config_panel label, .st-key-yt_queue_panel label, .st-key-yt_save_panel label { color: #cbd5e1 !important; }
+.st-key-yt_config_panel input, .st-key-yt_queue_panel input, .st-key-yt_save_panel input,
+.st-key-yt_config_panel textarea, .st-key-yt_queue_panel textarea, .st-key-yt_save_panel textarea,
+.st-key-yt_config_panel [data-baseweb="select"] > div, .st-key-yt_queue_panel [data-baseweb="select"] > div {
+    background-color: rgba(15, 23, 42, 0.78) !important;
+    color: #e2e8f0 !important;
+    border-color: rgba(148, 163, 184, 0.35) !important;
+}
+.st-key-yt_config_panel [data-baseweb="select"] svg, .st-key-yt_queue_panel [data-baseweb="select"] svg { color: #cbd5e1 !important; fill: #cbd5e1 !important; }
+.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) { background: rgba(15, 23, 42, 0.36) !important; border-bottom: 1px solid rgba(148, 163, 184, 0.2); border-radius: 0.4rem; padding: 0.5rem; margin-bottom: 0.35rem; }
+.st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox):hover { background: rgba(30, 41, 59, 0.48) !important; }
+.st-key-yt_config_panel button[kind="secondary"], .st-key-yt_queue_panel button[kind="secondary"], .st-key-yt_save_panel button[kind="secondary"] {
+    background: rgba(30, 41, 59, 0.7) !important;
+    border-color: rgba(148, 163, 184, 0.35) !important;
+    color: #e2e8f0 !important;
+}
+.st-key-yt_config_panel button[kind="secondary"]:hover, .st-key-yt_queue_panel button[kind="secondary"]:hover, .st-key-yt_save_panel button[kind="secondary"]:hover {
+    background: rgba(51, 65, 85, 0.8) !important;
+}
+.st-key-yt_config_panel button[kind="primary"], .st-key-yt_queue_panel button[kind="primary"] {
+    background: #2563eb !important;
+    border-color: #3b82f6 !important;
+}
+.st-key-yt_config_panel button[kind="primary"]:hover, .st-key-yt_queue_panel button[kind="primary"]:hover {
+    background: #1d4ed8 !important;
+}
+[data-theme="dark"] .st-key-mute_card [data-baseweb="input"] > div,
+[data-theme="dark"] .st-key-mute_card [data-baseweb="base-input"],
+[data-theme="dark"] .st-key-mute_card input {
+    background: rgba(15, 23, 42, 0.78) !important;
+    border-color: rgba(148, 163, 184, 0.40) !important;
+    color: #e2e8f0 !important;
+}
+.st-key-mute_card > div {
+    max-width: 760px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.93));
+    border: 1px solid rgba(203,213,225,0.65);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1405,9 +1548,9 @@ if st.session_state.get('conversion_running', False) or st.session_state.get('yt
     st.warning("⚠️ **Conversion/Download in progress.** Please do not switch tabs or refresh the page until it's complete.")
 
 # 메인 헤더
-st.markdown('''
+st.markdown(f'''
 <div class="vt-header">
-    <h1 class="vt-header__title">🎥 Video Tool v6.0</h1>
+    <h1 class="vt-header__title">🎥 {APP_NAME} v{APP_VERSION}</h1>
     <p class="vt-header__subtitle">Video Conversion &bull; YouTube Download &bull; Mute Video</p>
     <div class="vt-header__badges">
         <span class="vt-header__badge" style="background: linear-gradient(135deg, #3b82f6, #2563eb);">CRF MODE</span>
@@ -1419,11 +1562,17 @@ st.markdown('''
 ''', unsafe_allow_html=True)
 
 # 탭 생성
-tab1, tab2, tab3 = st.tabs(["Video Conversion", "YouTube Download", "Mute Video"])
+tab1, tab2, tab3 = st.tabs(["🎬 Video Conversion", "📥 YouTube Download", "🔇 Mute Video"])
 
 
 # Tab 1: Local File Conversion
 with tab1:
+    st.markdown("""
+    <div class="vt-tab-hero vt-tab-hero--light">
+        <p class="vt-tab-hero__title">Local Conversion Workspace</p>
+        <p class="vt-tab-hero__sub">폴더/파일 선택 → 정렬/선택 → 일괄 변환 흐름으로 작동합니다.</p>
+    </div>
+    """, unsafe_allow_html=True)
     # Option dictionaries (defined at tab scope for Tab 2 reuse)
     codec_options = {
         "h264": "H.264 - Universal",
@@ -1688,8 +1837,14 @@ with tab1:
     _codec_display = selected_codec.upper()
     _res_display = selected_resolution.upper() if selected_resolution != "original" else "ORIGINAL"
     _quality_display = selected_quality.upper()
+    _selected_count = len(selected_files)
+    _run_state = "RUNNING" if st.session_state.get('conversion_running', False) else "IDLE"
     st.markdown(f'''
     <div class="vt-status-bar">
+        <span>STATE: <strong>{_run_state}</strong></span>
+        <span style="color: var(--border-default);">|</span>
+        <span>SELECTED: <strong>{_selected_count}</strong></span>
+        <span style="color: var(--border-default);">|</span>
         <span>CODEC: <strong>{_codec_display}</strong></span>
         <span style="color: var(--border-default);">|</span>
         <span>RES: <strong>{_res_display}</strong></span>
@@ -1701,11 +1856,17 @@ with tab1:
 
 # 탭 2: 유튜브 다운로더
 with tab2:
+    st.markdown("""
+    <div class="vt-tab-hero vt-tab-hero--dark">
+        <p class="vt-tab-hero__title">YouTube Queue Console</p>
+        <p class="vt-tab-hero__sub">URL 추가 후 큐를 선택해 일괄 실행합니다. 주요 패널은 다크 콘솔 톤으로 분리했습니다. <span class="vt-kbd">Queue</span> <span class="vt-kbd">Batch</span></p>
+    </div>
+    """, unsafe_allow_html=True)
     # Stats cards
     _yt_queue = st.session_state['yt_queue']
     _yt_sel = sum(1 for item in _yt_queue if st.session_state['yt_queue_selection'].get(item['url'], True)) if _yt_queue else 0
     st.markdown(f'''
-    <div class="vt-stats-row">
+    <div class="vt-stats-row vt-stats-row--yt">
         <div class="vt-stats-card"><div class="vt-stats-card__label">QUEUE TOTAL</div><div class="vt-stats-card__value">{len(_yt_queue)}</div></div>
         <div class="vt-stats-card"><div class="vt-stats-card__label">SELECTED</div><div class="vt-stats-card__value vt-stats-card__value--accent">{_yt_sel}</div></div>
     </div>
@@ -1901,11 +2062,21 @@ with tab2:
                         if info_parts:
                             st.markdown(f'<p style="font-size:0.8rem;color:var(--text-secondary);margin:0;">{" | ".join(info_parts)}</p>', unsafe_allow_html=True)
                         if settings['download_only']:
-                            st.markdown('<p style="font-size:0.75rem;color:var(--text-muted);margin:0;">Download Only</p>', unsafe_allow_html=True)
+                            st.markdown(
+                                '<div class="vt-chip-row"><span class="vt-chip vt-chip--warn">DOWNLOAD ONLY</span></div>',
+                                unsafe_allow_html=True
+                            )
                         else:
                             codec_name = codec_options[settings['codec']].split(' - ')[0]
                             res_name = resolution_options[settings['resolution']]
-                            st.markdown(f'<p style="font-size:0.75rem;color:var(--text-muted);margin:0;">Convert: {codec_name}, {res_name}</p>', unsafe_allow_html=True)
+                            st.markdown(
+                                f'<div class="vt-chip-row">'
+                                f'<span class="vt-chip vt-chip--accent">CONVERT</span>'
+                                f'<span class="vt-chip vt-chip--mono">{codec_name}</span>'
+                                f'<span class="vt-chip vt-chip--mono">{res_name}</span>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
                     with col_remove:
                         if st.button("✕", key=f"yt_remove_{idx}", help="Remove"):
                             items_to_remove.append(idx)
@@ -1977,6 +2148,12 @@ with tab2:
 
 # Tab 3: Mute Video (무음 비디오 생성)
 with tab3:
+    st.markdown("""
+    <div class="vt-tab-hero vt-tab-hero--light">
+        <p class="vt-tab-hero__title">Mute Track Utility</p>
+        <p class="vt-tab-hero__sub">URL/로컬 입력 후 오디오 트랙만 제거해 빠르게 무음 비디오를 생성합니다.</p>
+    </div>
+    """, unsafe_allow_html=True)
     with st.container(key="mute_card"):
         st.markdown('''
         <h3 style="font-size: 1.17em; margin-bottom: 0.5rem;">
@@ -2061,9 +2238,9 @@ with tab3:
 
 # 푸터
 st.markdown("---")
-st.markdown("""
+st.markdown(f"""
 <div style="text-align: center; color: var(--text-secondary); padding: 2rem;">
-    <p>🎥 Video Tool v6.0 - Made by Channy</p>
+    <p>🎥 {APP_NAME} v{APP_VERSION} - Made by Channy</p>
     <p>Video conversion tool with batch YouTube download support.</p>
 </div>
 """, unsafe_allow_html=True)
