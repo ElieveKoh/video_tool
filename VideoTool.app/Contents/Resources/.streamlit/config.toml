@@ -1,0 +1,17 @@
+[server]
+# 로컬호스트에서만 접근 가능하도록 설정
+address = "localhost"
+port = 8601
+headless = false
+# localhost 전용이므로 CORS와 XSRF 보호 모두 활성화
+enableCORS = true
+enableXsrfProtection = true
+
+[browser]
+# 브라우저 자동 열기
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[theme]
+# 기본 테마 설정
+base = "light"

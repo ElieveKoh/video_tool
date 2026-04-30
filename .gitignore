@@ -1,0 +1,6 @@
+venv/
+bin/
+.update_tmp/
+converted_*/
+youtube_downloads/
+.DS_Store

@@ -1,0 +1,144 @@
+#!/bin/bash
+
+# Video Tool v6.0 Launcher
+# 앱 번들 내부 경로
+SCRIPT_DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
+LAUNCHER_SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+# --run 플래그가 없으면 터미널에서 실행
+if [ "$1" != "--run" ]; then
+    osascript -e "
+    tell application \"Terminal\"
+        activate
+        do script \"'$LAUNCHER_SCRIPT' --run\"
+    end tell
+    "
+    exit 0
+fi
+
+# 실제 실행
+APP_DIR="$SCRIPT_DIR"
+cd "$APP_DIR"
+
+# Python 경로 찾기 함수 (Skips25 방식 적용)
+find_python() {
+    # 가능한 Python 경로들을 순서대로 시도
+    local python_paths=(
+        "/usr/bin/python3"
+        "/usr/local/bin/python3"
+        "/opt/homebrew/bin/python3"
+        "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+        "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+        "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3"
+        "$(which python3 2>/dev/null)"
+    )
+
+    for python_path in "${python_paths[@]}"; do
+        if [[ -n "$python_path" && -x "$python_path" ]]; then
+            echo "$python_path"
+            return 0
+        fi
+    done
+
+    # PATH에서 python3 찾기
+    if command -v python3 >/dev/null 2>&1; then
+        echo "python3"
+        return 0
+    fi
+
+    return 1
+}
+
+# 시작 메시지
+echo "🎥 Video Tool v6.0"
+echo "===================="
+echo ""
+
+# 보안 해제
+xattr -rd com.apple.quarantine "$APP_DIR" 2>/dev/null || true
+
+# Python3 확인
+echo "🔍 Python 찾는 중..."
+PYTHON_CMD=$(find_python)
+
+if [[ -z "$PYTHON_CMD" ]]; then
+    echo "❌ Python3를 찾을 수 없습니다."
+    osascript -e 'display dialog "❌ Python3를 찾을 수 없습니다.\n\nhttps://python.org 에서 Python을 설치해주세요." buttons {"확인"} default button "확인" with icon stop'
+    exit 1
+fi
+
+echo "✅ Python 발견: $PYTHON_CMD"
+
+# FFmpeg 확인 (로컬 우선)
+if command -v ffmpeg &> /dev/null || [ -f "$APP_DIR/bin/ffmpeg" ]; then
+    echo "✅ FFmpeg 이미 설치됨"
+else
+    echo "📦 FFmpeg 다운로드 중..."
+    mkdir -p "$APP_DIR/bin"
+    curl -L "https://evermeet.cx/ffmpeg/getrelease/zip" -o /tmp/ffmpeg.zip
+    unzip -q /tmp/ffmpeg.zip -d "$APP_DIR/bin/"
+    rm /tmp/ffmpeg.zip
+    chmod +x "$APP_DIR/bin/ffmpeg"
+    echo "✅ FFmpeg 설치 완료"
+fi
+
+# yt-dlp 확인 (로컬 우선)
+if command -v yt-dlp &> /dev/null || [ -f "$APP_DIR/bin/yt-dlp" ]; then
+    echo "✅ yt-dlp 이미 설치됨"
+else
+    echo "📦 yt-dlp 다운로드 중..."
+    mkdir -p "$APP_DIR/bin"
+    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o "$APP_DIR/bin/yt-dlp"
+    chmod +x "$APP_DIR/bin/yt-dlp"
+    echo "✅ yt-dlp 설치 완료"
+fi
+
+# PATH 설정
+export PATH="$APP_DIR/bin:$PATH"
+
+# Python 가상환경
+if [ -d "$APP_DIR/venv" ]; then
+    echo "✅ Python 가상환경 이미 존재"
+else
+    echo "📦 Python 가상환경 생성 중..."
+    $PYTHON_CMD -m venv "$APP_DIR/venv"
+    echo "✅ Python 가상환경 생성 완료"
+fi
+
+source "$APP_DIR/venv/bin/activate"
+
+# pip 업그레이드
+echo "📦 pip 업그레이드 중..."
+python -m pip install --upgrade pip --quiet 2>&1 | grep -v "WARNING" || true
+
+# Streamlit 확인 및 설치
+if python -c "import streamlit" 2>/dev/null; then
+    echo "✅ Streamlit 이미 설치됨"
+else
+    echo "📦 Streamlit 설치 중..."
+    # pyarrow 없이 streamlit만 설치
+    python -m pip install streamlit --no-cache-dir 2>&1 | grep -E "Successfully|ERROR" || echo "설치 중..."
+
+    # 설치 확인
+    if python -c "import streamlit" 2>/dev/null; then
+        echo "✅ Streamlit 설치 완료"
+    else
+        echo "❌ Streamlit 설치 실패"
+        exit 1
+    fi
+fi
+
+# 포트 찾기
+PORT=8601
+while lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; do
+    PORT=$((PORT + 1))
+done
+
+echo "🚀 Video Tool 실행 중... (포트 $PORT)"
+
+# Streamlit 실행
+python -m streamlit run "$APP_DIR/video_converter_app.py" \
+    --server.headless=false \
+    --server.port=$PORT \
+    --browser.serverAddress=localhost \
+    --server.fileWatcherType=none
