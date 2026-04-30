@@ -149,6 +149,11 @@ Made with love by Channy
 
 ## Version History
 
+### v6.0.4 - 2026.04.30
+- Synced the `.app` bundled UI file with the latest main UI to reduce post-update UI mismatch issues
+- Switched launch address to `127.0.0.1` to reduce browser cache conflicts causing blank screens
+- Added a post-update tip message for hard refresh recovery
+
 ### v6.0.3 - 2026.04.30
 - Refined glassmorphism UI details (logo contrast, button tone, panel clarity)
 - Improved readability and overlap handling in `Advanced Settings` expander header

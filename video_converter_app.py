@@ -643,7 +643,7 @@ class YouTubeDownloader:
 
 # 앱 메타 정보
 APP_NAME = "Video Tool"
-APP_VERSION = "6.0.3"
+APP_VERSION = "6.0.4"
 
 # 페이지 설정
 st.set_page_config(

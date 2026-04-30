@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Video Tool v6.0.3 Launcher
+# Video Tool v6.0.4 Launcher
 # 앱 버전 (릴리즈할 때 함께 갱신)
-APP_VERSION="6.0.3"
+APP_VERSION="6.0.4"
 # GitHub 저장소
 GITHUB_REPO="ElieveKoh/video_tool"
 
@@ -188,6 +188,7 @@ PY
     rm -rf "$tmp_dir"
 
     echo "✅ 업데이트 완료! 최신 버전으로 다시 시작합니다."
+    echo "ℹ️ 업데이트 직후 화면이 비면 브라우저에서 Cmd+Shift+R로 새로고침하세요."
     exec "$LAUNCHER_SCRIPT" --run
 }
 
@@ -323,5 +324,6 @@ echo "🚀 Video Tool 실행 중... (포트 $PORT)"
 python -m streamlit run "$APP_DIR/video_converter_app.py" \
     --server.headless=false \
     --server.port=$PORT \
-    --browser.serverAddress=localhost \
+    --server.address=127.0.0.1 \
+    --browser.serverAddress=127.0.0.1 \
     --server.fileWatcherType=none

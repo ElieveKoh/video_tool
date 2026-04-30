@@ -4,7 +4,7 @@ echo "🎥 스마트 비디오 변환기"
 echo "====================="
 
 # 앱 버전 (릴리즈할 때 함께 갱신)
-APP_VERSION="6.0.3"
+APP_VERSION="6.0.4"
 # GitHub 저장소 (예: channy/video-tool)
 GITHUB_REPO="ElieveKoh/video_tool"
 
@@ -181,7 +181,8 @@ PY
     chmod +x "$APP_DIR/실행하기.command" 2>/dev/null || true
     rm -rf "$tmp_dir"
 
-    echo "✅ 업데이트 완료! 최신 버전으로 다시 시작합니다."
+echo "✅ 업데이트 완료! 최신 버전으로 다시 시작합니다."
+echo "ℹ️ 업데이트 직후 화면이 비면 브라우저에서 Cmd+Shift+R로 새로고침하세요."
     exec "$APP_DIR/실행하기.command"
 }
 
@@ -244,8 +245,8 @@ done
 
 echo "✅ 포트 $PORT 에서 실행합니다."
 
-# Streamlit 실행 (localhost 전용)
-python -m streamlit run video_converter_app.py --server.headless=false --server.port=$PORT --server.address=localhost --server.fileWatcherType=none
+# Streamlit 실행 (127.0.0.1 전용 - localhost 캐시 분리)
+python -m streamlit run video_converter_app.py --server.headless=false --server.port=$PORT --server.address=127.0.0.1 --browser.serverAddress=127.0.0.1 --server.fileWatcherType=none
 
 echo ""
 echo "프로그램 종료"
