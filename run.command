@@ -29,7 +29,7 @@ fi
 
 check_and_apply_update() {
     if [ -z "$GITHUB_REPO" ] || [ "$GITHUB_REPO" = "OWNER/REPO" ]; then
-        echo "ℹ️  자동 업데이트를 사용하려면 실행하기.command의 GITHUB_REPO 값을 설정하세요."
+        echo "ℹ️  자동 업데이트를 사용하려면 run.command의 GITHUB_REPO 값을 설정하세요."
         return 0
     fi
 
@@ -191,12 +191,12 @@ with zipfile.ZipFile('$tmp_dir/update.zip', 'r') as z:
         return 0
     fi
 
-    chmod +x "$APP_DIR/실행하기.command" 2>/dev/null || true
+    chmod +x "$APP_DIR/run.command" 2>/dev/null || true
     rm -rf "$tmp_dir"
 
 echo "✅ 업데이트 완료! 최신 버전으로 다시 시작합니다."
 echo "ℹ️ 업데이트 직후 화면이 비면 브라우저에서 Cmd+Shift+R로 새로고침하세요."
-    exec "$APP_DIR/실행하기.command"
+    exec "$APP_DIR/run.command"
 }
 
 check_and_apply_update
