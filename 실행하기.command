@@ -135,10 +135,23 @@ PY
     fi
 
     echo "📦 업데이트 적용 중..."
-    if ! unzip -q "$tmp_dir/update.zip" -d "$tmp_dir/extracted"; then
-        echo "❌ 압축 해제 실패. 현재 버전으로 실행합니다."
-        rm -rf "$tmp_dir"
-        return 0
+    # macOS unzip은 한글 파일명(UTF-8)을 깨뜨리므로 ditto 사용
+    if command -v ditto >/dev/null 2>&1; then
+        if ! ditto -xk "$tmp_dir/update.zip" "$tmp_dir/extracted"; then
+            echo "❌ 압축 해제 실패. 현재 버전으로 실행합니다."
+            rm -rf "$tmp_dir"
+            return 0
+        fi
+    else
+        if ! python3 -c "
+import zipfile, sys
+with zipfile.ZipFile('$tmp_dir/update.zip', 'r') as z:
+    z.extractall('$tmp_dir/extracted')
+"; then
+            echo "❌ 압축 해제 실패. 현재 버전으로 실행합니다."
+            rm -rf "$tmp_dir"
+            return 0
+        fi
     fi
 
     local src_dir=""

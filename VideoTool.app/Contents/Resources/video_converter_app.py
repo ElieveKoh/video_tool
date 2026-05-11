@@ -643,7 +643,7 @@ class YouTubeDownloader:
 
 # 앱 메타 정보
 APP_NAME = "Video Tool"
-APP_VERSION = "6.0.4"
+APP_VERSION = "6.0.5"
 
 # 페이지 설정
 st.set_page_config(
@@ -679,9 +679,10 @@ def init_session_state():
 
 init_session_state()
 
-# === VideoTool v6.0 Lumina UI CSS ===
-# Use st.html (not st.markdown) — markdown parser treats 4-space indented CSS rules as code blocks.
-st.html("""
+@st.cache_resource
+def get_app_css():
+    """CSS 문자열을 한 번만 생성하고 캐싱 — 매 rerun마다 재파싱 방지"""
+    return """
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
 <style>
@@ -768,8 +769,8 @@ st.html("""
 .stApp { background: var(--m-surface) !important; }
 [data-theme="dark"] .stApp { background: var(--m-surface) !important; }
 
-/* === Mesh background (3 orbs, Lumina spec) === */
-body::before, body::after, .vt-mesh { pointer-events: none; }
+/* === Mesh background (3 orbs, Lumina spec) — will-change로 GPU 레이어 고정 === */
+body::before, body::after, .vt-mesh { pointer-events: none; will-change: transform; }
 body::before {
     content: "";
     position: fixed;
@@ -777,8 +778,9 @@ body::before {
     width: 50vw; height: 50vw;
     border-radius: 9999px;
     background: radial-gradient(circle, rgba(216,226,255,0.6) 0%, rgba(216,226,255,0) 70%);
-    filter: blur(20px);
+    filter: blur(12px);
     z-index: 0;
+    transform: translateZ(0);
 }
 body::after {
     content: "";
@@ -787,8 +789,9 @@ body::after {
     width: 60vw; height: 60vw;
     border-radius: 9999px;
     background: radial-gradient(circle, rgba(246,217,255,0.5) 0%, rgba(246,217,255,0) 70%);
-    filter: blur(20px);
+    filter: blur(12px);
     z-index: 0;
+    transform: translateZ(0);
 }
 [data-theme="dark"] body::before {
     background: radial-gradient(circle, rgba(0,88,188,0.30) 0%, rgba(0,88,188,0) 65%);
@@ -872,14 +875,16 @@ footer { visibility: hidden !important; }
 [data-theme="dark"] code { background-color: var(--bg-tertiary) !important; color: var(--text-primary) !important; }
 [data-theme="dark"] pre { background-color: var(--bg-tertiary) !important; border-color: var(--border-default) !important; }
 [data-theme="dark"] hr { border-color: var(--border-default) !important; }
-/* === Glass panels (Lumina spec) === */
+/* === Glass panels (Lumina spec) — contain으로 리플로우 격리 === */
 .st-key-config_panel > div, .st-key-file_source > div, .st-key-queue_panel > div, .st-key-mute_card > div, .st-key-yt_config_panel > div, .st-key-yt_queue_panel > div, .st-key-yt_save_panel > div {
     background: var(--glass-bg);
     border: 0.5px solid var(--glass-border);
     border-radius: 24px;
     box-shadow: var(--glass-shadow);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    will-change: transform;
+    contain: layout style;
 }
 .st-key-config_panel > div, .st-key-yt_config_panel > div { padding: 24px; }
 .st-key-file_source > div { padding: 18px; margin-top: 12px; }
@@ -897,8 +902,10 @@ footer { visibility: hidden !important; }
     border-radius: 16px;
     padding: 24px;
     box-shadow: var(--card-shadow);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    will-change: transform;
+    contain: layout style;
 }
 .vt-stats-card::after {
     content: ""; position: absolute; top: -16px; right: -16px;
@@ -1110,8 +1117,84 @@ div[data-testid="stHorizontalBlock"] { gap: 8px; }
 
 /* keep mute card centered */
 .st-key-mute_card > div { max-width: 760px; margin: 0 auto; }
+
+/* === Loading overlay — Streamlit 기본 블러 대체 === */
+@keyframes vt-spin { to { transform: rotate(360deg); } }
+@keyframes vt-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* 기본 상태 위젯 숨기기 */
+[data-testid="stStatusWidget"] {
+    visibility: hidden !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    position: absolute !important;
+}
+
+/* 로딩 배경 오버레이 */
+.stApp:has([data-testid="stStatusWidget"]:not(:empty))::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: rgba(252, 248, 251, 0.55);
+    z-index: 9990;
+    pointer-events: none;
+    animation: vt-fade-in 120ms ease-out;
+}
+[data-theme="dark"] .stApp:has([data-testid="stStatusWidget"]:not(:empty))::before {
+    background: rgba(15, 23, 42, 0.55);
+}
+
+/* 중앙 스피너 */
+.stApp:has([data-testid="stStatusWidget"]:not(:empty))::after {
+    content: "";
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 40px;
+    height: 40px;
+    margin: -44px 0 0 -20px;
+    border: 3px solid rgba(0, 88, 188, 0.15);
+    border-top-color: var(--m-primary);
+    border-radius: 50%;
+    animation: vt-spin 0.65s linear infinite;
+    z-index: 9991;
+    pointer-events: none;
+}
+[data-theme="dark"] .stApp:has([data-testid="stStatusWidget"]:not(:empty))::after {
+    border-color: rgba(173, 198, 255, 0.15);
+    border-top-color: var(--m-primary);
+}
+
+/* 스피너 아래 "Loading" 텍스트 */
+.stApp:has([data-testid="stStatusWidget"]:not(:empty)) .main .block-container::before {
+    content: "Loading\2026";
+    position: fixed;
+    top: calc(50% + 12px);
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.02em;
+    z-index: 9991;
+    pointer-events: none;
+    animation: vt-fade-in 180ms ease-out;
+}
+
+/* st.spinner 스타일 강화 */
+.stSpinner > div {
+    border-radius: 12px;
+    padding: 12px 20px !important;
+    background: var(--glass-bg-strong) !important;
+    border: 0.5px solid var(--glass-border) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--card-shadow) !important;
+}
 </style>
-""")
+"""
+
+st.html(get_app_css())
 
 
 # 공통 함수들
@@ -1190,6 +1273,14 @@ def open_file_dialog():
                         st.session_state['video_files_list'] = valid_files
                         st.session_state['file_selection_state'] = {file: True for file in valid_files}
                         st.session_state['selected_folder_path'] = os.path.dirname(valid_files[0])
+                        meta = {}
+                        for f in valid_files:
+                            try:
+                                stat = os.stat(f)
+                                meta[f] = {'name': os.path.basename(f), 'size': stat.st_size, 'date': stat.st_mtime}
+                            except OSError:
+                                meta[f] = {'name': os.path.basename(f), 'size': 0, 'date': 0}
+                        st.session_state['file_meta_cache'] = meta
                         return valid_files
             return None
         except Exception as e:
@@ -1198,17 +1289,31 @@ def open_file_dialog():
     return None
 
 def scan_folder_files(folder_path):
-    """선택된 폴더에서 비디오 파일 스캔"""
-    video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp']
+    """선택된 폴더에서 비디오 파일 스캔 + 메타데이터 캐싱"""
+    video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
     video_files = []
+    file_meta_cache = {}
     
     try:
         for file in os.listdir(folder_path):
-            if any(file.lower().endswith(ext) for ext in video_extensions):
-                video_files.append(os.path.join(folder_path, file))
+            if os.path.splitext(file)[1].lower() in video_extensions:
+                full_path = os.path.join(folder_path, file)
+                video_files.append(full_path)
+                try:
+                    stat = os.stat(full_path)
+                    file_meta_cache[full_path] = {
+                        'name': file,
+                        'size': stat.st_size,
+                        'date': stat.st_mtime,
+                    }
+                except OSError:
+                    file_meta_cache[full_path] = {
+                        'name': file, 'size': 0, 'date': 0,
+                    }
         
         st.session_state['video_files_list'] = video_files
         st.session_state['file_selection_state'] = {file: True for file in video_files}
+        st.session_state['file_meta_cache'] = file_meta_cache
         
     except Exception as e:
         st.error(f"Folder scan error: {e}")
@@ -1638,67 +1743,18 @@ def download_and_convert_youtube(url, target_codec, target_resolution, quality_p
         st.success(f"🎉 All tasks completed! File saved to: `{final_file}`")
         st.balloons()
 
-# 테마 적용 스크립트 (components.html 사용)
+# 테마 적용 스크립트 — 1회 적용, MutationObserver/setTimeout 제거
 theme_html = f"""
 <script>
 (function() {{
-    const theme = '{st.session_state['theme_mode']}';
-    console.log('VideoTool: Applying theme:', theme);
-
-    // 테마 적용 함수
-    const applyTheme = () => {{
-        try {{
-            // 메인 앱 요소 찾기
-            const stApp = window.parent.document.querySelector('[data-testid="stApp"]');
-            if (stApp) {{
-                stApp.setAttribute('data-theme', theme);
-                console.log('VideoTool: Theme applied to stApp:', theme);
-            }} else {{
-                console.warn('VideoTool: stApp element not found');
-            }}
-
-            // body에도 적용
-            const body = window.parent.document.body;
-            if (body) {{
-                body.setAttribute('data-theme', theme);
-                console.log('VideoTool: Theme applied to body:', theme);
-            }}
-
-            // html에도 적용
-            const html = window.parent.document.documentElement;
-            if (html) {{
-                html.setAttribute('data-theme', theme);
-                console.log('VideoTool: Theme applied to html:', theme);
-            }}
-        }} catch (e) {{
-            console.error('VideoTool: Error applying theme:', e);
-        }}
-    }};
-
-    // 즉시 적용
-    applyTheme();
-
-    // 100ms 후 재적용 (DOM 로드 지연 대비)
-    setTimeout(applyTheme, 100);
-
-    // 500ms 후 재적용 (추가 안전장치)
-    setTimeout(applyTheme, 500);
-
-    // DOM 변경 감지하여 재적용
-    try {{
-        const observer = new MutationObserver(() => {{
-            applyTheme();
-        }});
-
-        if (window.parent.document.body) {{
-            observer.observe(window.parent.document.body, {{
-                childList: true,
-                subtree: false,
-                attributes: false
-            }});
-        }}
-    }} catch (e) {{
-        console.error('VideoTool: Error setting up observer:', e);
+    var theme = '{st.session_state['theme_mode']}';
+    var targets = [
+        window.parent.document.documentElement,
+        window.parent.document.body,
+        window.parent.document.querySelector('[data-testid="stApp"]')
+    ];
+    for (var i = 0; i < targets.length; i++) {{
+        if (targets[i]) targets[i].setAttribute('data-theme', theme);
     }}
 }})();
 </script>
@@ -1708,7 +1764,9 @@ components.html(theme_html, height=0)
 # 테마 토글 버튼 (스타일은 통합 CSS에 정의됨)
 theme_icon = "☀" if st.session_state['theme_mode'] == 'dark' else "☾"
 if st.button(theme_icon, key="theme_toggle", help="Toggle Light/Dark Mode"):
-    st.session_state['theme_mode'] = 'dark' if st.session_state['theme_mode'] == 'light' else 'light'
+    new_mode = 'dark' if st.session_state['theme_mode'] == 'light' else 'light'
+    st.session_state['theme_mode'] = new_mode
+    st.toast(f"{'Dark' if new_mode == 'dark' else 'Light'} mode", icon="☀️" if new_mode == 'light' else "🌙")
     st.rerun()
 
 # 진행 중 경고 표시
@@ -1793,8 +1851,9 @@ with tab1:
 
     # --- Stats cards ---
     _files = st.session_state['video_files_list']
+    _meta = st.session_state.get('file_meta_cache', {})
     _sel_count = sum(1 for f in _files if st.session_state['file_selection_state'].get(f, True)) if _files else 0
-    _total_mb = sum(os.path.getsize(f) / (1024*1024) for f in _files if os.path.exists(f)) if _files else 0
+    _total_mb = sum(_meta.get(f, {}).get('size', 0) / (1024*1024) for f in _files) if _files else 0
     if _total_mb < 1024:
         _size_num, _size_unit = f"{_total_mb:.1f}", "MB"
     else:
@@ -1883,15 +1942,18 @@ with tab1:
                 fc1, fc2 = st.columns(2)
                 with fc1:
                     if st.button("Select Folder", use_container_width=True, key="btn_folder"):
-                        with st.spinner("📂 Opening folder dialog..."):
+                        with st.spinner("📂 Waiting for folder selection..."):
                             selected = open_folder_dialog()
                         if selected:
+                            file_count = len(st.session_state.get('video_files_list', []))
+                            st.toast(f"📂 {file_count} video files loaded", icon="✅")
                             st.rerun()
                 with fc2:
                     if st.button("Select Files", use_container_width=True, key="btn_files"):
-                        with st.spinner("📂 Opening file dialog..."):
+                        with st.spinner("📂 Waiting for file selection..."):
                             selected = open_file_dialog()
                         if selected:
+                            st.toast(f"📂 {len(selected)} files selected", icon="✅")
                             st.rerun()
             else:
                 manual_path = st.text_input(
@@ -1920,105 +1982,112 @@ with tab1:
     with right_col:
         st.markdown('<p class="vt-section-label">PROJECT FILES</p>', unsafe_allow_html=True)
 
-        with st.container(key="queue_panel"):
-            if st.session_state['video_files_list']:
-                st.success(f"📹 {len(st.session_state['video_files_list'])} video files")
+        @st.fragment
+        def render_file_queue():
+            """파일 큐 패널 — fragment로 분리하여 체크박스 토글 시 전체 페이지 rerun 방지"""
+            with st.container(key="queue_panel"):
+                if st.session_state['video_files_list']:
+                    st.success(f"📹 {len(st.session_state['video_files_list'])} video files")
 
-                # File info collection
-                file_info_list = []
-                for video_file in st.session_state['video_files_list']:
-                    file_info_list.append({
-                        'path': video_file,
-                        'name': os.path.basename(video_file),
-                        'size': os.path.getsize(video_file),
-                        'date': os.path.getmtime(video_file)
-                    })
-
-                # Sorting
-                reverse = (st.session_state['sort_order'] == 'desc')
-                if st.session_state['sort_by'] == 'name':
-                    file_info_list.sort(key=lambda x: x['name'].lower(), reverse=reverse)
-                elif st.session_state['sort_by'] == 'date':
-                    file_info_list.sort(key=lambda x: x['date'], reverse=reverse)
-                elif st.session_state['sort_by'] == 'size':
-                    file_info_list.sort(key=lambda x: x['size'], reverse=reverse)
-
-                # Sort arrows
-                name_arrow = (" ↑" if st.session_state['sort_order'] == 'asc' else " ↓") if st.session_state['sort_by'] == 'name' else " ↕"
-                size_arrow = (" ↑" if st.session_state['sort_order'] == 'asc' else " ↓") if st.session_state['sort_by'] == 'size' else " ↕"
-                date_arrow = (" ↑" if st.session_state['sort_order'] == 'asc' else " ↓") if st.session_state['sort_by'] == 'date' else " ↕"
-
-                # Table header
-                col_check_h, col_name_h, col_size_h, col_date_h = st.columns([0.5, 3, 1, 1.5])
-                with col_check_h:
-                    all_selected = all(st.session_state['file_selection_state'].get(f, True) for f in st.session_state['video_files_list'])
-                    toggle_label = "☑ All" if all_selected else "☐ All"
-                    if st.button(toggle_label, key="toggle_all_header", use_container_width=True):
-                        new_state = not all_selected
-                        for vf in st.session_state['video_files_list']:
-                            st.session_state['file_selection_state'][vf] = new_state
-                        st.session_state['vc_toggle_counter'] += 1
-                        st.rerun()
-                with col_name_h:
-                    if st.button(f"File Name{name_arrow}", key="sort_name", use_container_width=True):
-                        if st.session_state['sort_by'] == 'name':
-                            st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
+                    _meta = st.session_state.get('file_meta_cache', {})
+                    file_info_list = []
+                    for video_file in st.session_state['video_files_list']:
+                        cached = _meta.get(video_file)
+                        if cached:
+                            file_info_list.append({'path': video_file, **cached})
                         else:
-                            st.session_state['sort_by'] = 'name'
-                            st.session_state['sort_order'] = 'asc'
-                        st.rerun()
-                with col_size_h:
-                    if st.button(f"Size{size_arrow}", key="sort_size", use_container_width=True):
-                        if st.session_state['sort_by'] == 'size':
-                            st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
-                        else:
-                            st.session_state['sort_by'] = 'size'
-                            st.session_state['sort_order'] = 'desc'
-                        st.rerun()
-                with col_date_h:
-                    if st.button(f"Modified{date_arrow}", key="sort_date", use_container_width=True):
-                        if st.session_state['sort_by'] == 'date':
-                            st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
-                        else:
-                            st.session_state['sort_by'] = 'date'
-                            st.session_state['sort_order'] = 'desc'
-                        st.rerun()
+                            file_info_list.append({
+                                'path': video_file,
+                                'name': os.path.basename(video_file),
+                                'size': os.path.getsize(video_file) if os.path.exists(video_file) else 0,
+                                'date': os.path.getmtime(video_file) if os.path.exists(video_file) else 0,
+                            })
 
-                # File rows
-                for i, file_info in enumerate(file_info_list):
-                    video_file = file_info['path']
-                    file_name = file_info['name']
-                    file_size_mb = file_info['size'] / (1024 * 1024)
-                    file_date = datetime.fromtimestamp(file_info['date']).strftime('%Y-%m-%d %H:%M')
+                    reverse = (st.session_state['sort_order'] == 'desc')
+                    if st.session_state['sort_by'] == 'name':
+                        file_info_list.sort(key=lambda x: x['name'].lower(), reverse=reverse)
+                    elif st.session_state['sort_by'] == 'date':
+                        file_info_list.sort(key=lambda x: x['date'], reverse=reverse)
+                    elif st.session_state['sort_by'] == 'size':
+                        file_info_list.sort(key=lambda x: x['size'], reverse=reverse)
 
-                    col_check, col_name, col_size, col_date = st.columns([0.5, 3, 1, 1.5])
-                    with col_check:
-                        current_state = st.session_state['file_selection_state'].get(video_file, True)
-                        toggle_counter = st.session_state.get('vc_toggle_counter', 0)
-                        file_key = f"file_check_{hash(video_file)}_{toggle_counter}"
-                        is_selected = st.checkbox("✓", value=current_state, key=file_key, label_visibility="collapsed")
-                        st.session_state['file_selection_state'][video_file] = is_selected
-                    with col_name:
-                        st.markdown(f'<p>📄 {file_name}</p>', unsafe_allow_html=True)
-                    with col_size:
-                        st.markdown(f'<p style="text-align:center;"><strong>{file_size_mb:.1f} MB</strong></p>', unsafe_allow_html=True)
-                    with col_date:
-                        st.markdown(f'<p style="text-align:center;">{file_date}</p>', unsafe_allow_html=True)
-                    if is_selected:
-                        selected_files.append(video_file)
-            else:
-                st.info("📂 Select a folder or files to begin")
+                    name_arrow = (" ↑" if st.session_state['sort_order'] == 'asc' else " ↓") if st.session_state['sort_by'] == 'name' else " ↕"
+                    size_arrow = (" ↑" if st.session_state['sort_order'] == 'asc' else " ↓") if st.session_state['sort_by'] == 'size' else " ↕"
+                    date_arrow = (" ↑" if st.session_state['sort_order'] == 'asc' else " ↓") if st.session_state['sort_by'] == 'date' else " ↕"
+
+                    col_check_h, col_name_h, col_size_h, col_date_h = st.columns([0.5, 3, 1, 1.5])
+                    with col_check_h:
+                        all_selected = all(st.session_state['file_selection_state'].get(f, True) for f in st.session_state['video_files_list'])
+                        toggle_label = "☑ All" if all_selected else "☐ All"
+                        if st.button(toggle_label, key="toggle_all_header", use_container_width=True):
+                            new_state = not all_selected
+                            for vf in st.session_state['video_files_list']:
+                                st.session_state['file_selection_state'][vf] = new_state
+                            st.session_state['vc_toggle_counter'] += 1
+                            st.rerun()
+                    with col_name_h:
+                        if st.button(f"File Name{name_arrow}", key="sort_name", use_container_width=True):
+                            if st.session_state['sort_by'] == 'name':
+                                st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
+                            else:
+                                st.session_state['sort_by'] = 'name'
+                                st.session_state['sort_order'] = 'asc'
+                            st.rerun()
+                    with col_size_h:
+                        if st.button(f"Size{size_arrow}", key="sort_size", use_container_width=True):
+                            if st.session_state['sort_by'] == 'size':
+                                st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
+                            else:
+                                st.session_state['sort_by'] = 'size'
+                                st.session_state['sort_order'] = 'desc'
+                            st.rerun()
+                    with col_date_h:
+                        if st.button(f"Modified{date_arrow}", key="sort_date", use_container_width=True):
+                            if st.session_state['sort_by'] == 'date':
+                                st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
+                            else:
+                                st.session_state['sort_by'] = 'date'
+                                st.session_state['sort_order'] = 'desc'
+                            st.rerun()
+
+                    for i, file_info in enumerate(file_info_list):
+                        video_file = file_info['path']
+                        file_name = file_info['name']
+                        file_size_mb = file_info['size'] / (1024 * 1024)
+                        file_date = datetime.fromtimestamp(file_info['date']).strftime('%Y-%m-%d %H:%M')
+
+                        col_check, col_name, col_size, col_date = st.columns([0.5, 3, 1, 1.5])
+                        with col_check:
+                            current_state = st.session_state['file_selection_state'].get(video_file, True)
+                            toggle_counter = st.session_state.get('vc_toggle_counter', 0)
+                            file_key = f"file_check_{hash(video_file)}_{toggle_counter}"
+                            is_selected = st.checkbox("✓", value=current_state, key=file_key, label_visibility="collapsed")
+                            st.session_state['file_selection_state'][video_file] = is_selected
+                        with col_name:
+                            st.markdown(f'<p>📄 {file_name}</p>', unsafe_allow_html=True)
+                        with col_size:
+                            st.markdown(f'<p style="text-align:center;"><strong>{file_size_mb:.1f} MB</strong></p>', unsafe_allow_html=True)
+                        with col_date:
+                            st.markdown(f'<p style="text-align:center;">{file_date}</p>', unsafe_allow_html=True)
+                else:
+                    st.info("📂 Select a folder or files to begin")
+
+        render_file_queue()
+
+        selected_files = [f for f in st.session_state['video_files_list']
+                          if st.session_state['file_selection_state'].get(f, True)]
 
     # --- Conversion logic (full width, after both columns) ---
     if stop_conversion:
         st.session_state['converter'].stop_conversion()
         st.session_state['conversion_running'] = False
-        st.warning("Conversion has been stopped.")
+        st.toast("Conversion stopped", icon="⏹️")
         st.rerun()
 
     if start_conversion and not st.session_state['conversion_running'] and selected_files:
-        with st.spinner("⚙️ Preparing conversion..."):
+        with st.spinner(f"⚙️ Preparing {len(selected_files)} file(s) for conversion..."):
             st.session_state['conversion_running'] = True
+        st.toast(f"Starting conversion — {len(selected_files)} file(s)", icon="🎬")
         st.rerun()
 
     if st.session_state.get('conversion_running', False) and selected_files:
@@ -2293,12 +2362,13 @@ with tab2:
         st.session_state['yt_downloader'].stop_download()
         st.session_state['converter'].stop_conversion()
         st.session_state['yt_download_running'] = False
-        st.warning("Batch operation has been stopped.")
+        st.toast("Batch operation stopped", icon="⏹️")
         st.rerun()
 
     if start_batch and not st.session_state.get('yt_download_running', False):
         with st.spinner("Preparing batch download/conversion..."):
             st.session_state['yt_download_running'] = True
+        st.toast("Batch download started", icon="📥")
         st.rerun()
 
     if download_now_btn and youtube_url:
@@ -2313,7 +2383,7 @@ with tab2:
     if add_to_queue_btn and youtube_url:
         already_in_queue = youtube_url in [item['url'] for item in st.session_state['yt_queue']]
         if not already_in_queue:
-            with st.spinner("Fetching video title..."):
+            with st.spinner("Fetching video info from YouTube..."):
                 video_info = st.session_state['yt_downloader'].get_video_title_fast(youtube_url)
             if video_info:
                 queue_item = {
@@ -2328,7 +2398,7 @@ with tab2:
                 }
                 st.session_state['yt_queue'].append(queue_item)
                 st.session_state['yt_queue_selection'][youtube_url] = True
-                st.success(f"Added: {video_info['title']}")
+                st.toast(f"Added to queue: {video_info['title']}", icon="📥")
                 st.session_state['yt_url_input'] = ""
                 st.rerun()
             else:
