@@ -146,7 +146,7 @@ VideoTool/
 
 ---
 
-**Made with ❤️ by Channy**
+**by Channy**
 
 ## 📋 Version History
 
