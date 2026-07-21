@@ -15,7 +15,90 @@ import webbrowser
 from threading import Thread
 import re
 import signal
+import sys
+import functools
 from datetime import datetime
+
+
+# 유튜브 제목 조회 결과 캐시(성공만 저장). 같은 URL 재조회 시 네트워크 호출 없이 즉시 반환.
+_YT_TITLE_CACHE = {}
+_YT_TITLE_CACHE_LOCK = threading.Lock()
+
+
+def _fetch_video_title(yt_dlp_path, url):
+    """yt-dlp로 제목만 빠르게 추출. 성공 결과는 프로세스 캐시에 저장한다.
+
+    - `--no-playlist`로 재생목록 전체 열거를 막아 속도를 높인다.
+    - `--socket-timeout`으로 네트워크 지연 시 조기 실패하도록 한다.
+    - 실패(None)는 캐시하지 않아 일시적 오류가 고정되지 않는다.
+    """
+    with _YT_TITLE_CACHE_LOCK:
+        if url in _YT_TITLE_CACHE:
+            return _YT_TITLE_CACHE[url]
+    try:
+        cmd = [
+            yt_dlp_path, '--get-title', '--no-warnings',
+            '--no-playlist', '--socket-timeout', '15', url,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            title = result.stdout.strip()
+            info = {
+                'title': title if title else 'Unknown',
+                'duration': 0,
+                'uploader': 'Unknown',
+                'view_count': 0,
+                'upload_date': 'Unknown',
+            }
+            with _YT_TITLE_CACHE_LOCK:
+                _YT_TITLE_CACHE[url] = info
+            return info
+        print(f"yt-dlp error (returncode {result.returncode}): {result.stderr.strip()}")
+        return None
+    except subprocess.TimeoutExpired:
+        print(f"yt-dlp timeout (30s) fetching: {url}")
+        return None
+    except Exception as e:
+        print(f"비디오 제목 추출 오류: {e}")
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_yt_dlp_version(yt_dlp_path):
+    """yt-dlp 버전 문자열을 캐싱(1시간).
+
+    유튜브 탭이 그려질 때마다 `yt-dlp --version` subprocess를 실행하던 것을 방지한다.
+    yt-dlp 업데이트 후에는 `_cached_yt_dlp_version.clear()`로 무효화한다.
+    """
+    try:
+        result = subprocess.run(
+            [yt_dlp_path, '--version'], capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+@functools.lru_cache(maxsize=8)
+def _detect_hw_accel(ffmpeg_path):
+    """macOS VideoToolbox 인코더 지원 여부를 프로세스 단위로 1회만 감지.
+
+    ffmpeg -encoders 호출은 비용이 커서 매 rerun마다 실행하면 앱이 느려진다.
+    lru_cache로 감싸 프로세스 생명주기 동안 한 번만 실행되도록 한다.
+    """
+    if sys.platform != 'darwin':
+        return False
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, '-hide_banner', '-encoders'],
+            capture_output=True, text=True, timeout=5
+        )
+        return 'h264_videotoolbox' in result.stdout
+    except Exception:
+        return False
+
 
 class VideoConverterCore:
     """비디오 변환 핵심 기능 클래스"""
@@ -75,21 +158,11 @@ class VideoConverterCore:
         self.hw_accel_available = self._check_hw_accel()
 
     def _check_hw_accel(self):
-        """하드웨어 가속 사용 가능 여부 확인 (macOS VideoToolbox)"""
-        import sys
-        if sys.platform != 'darwin':
-            return False
+        """하드웨어 가속 사용 가능 여부 확인 (macOS VideoToolbox)
 
-        try:
-            ffmpeg_path = self._get_ffmpeg_path()
-            result = subprocess.run(
-                [ffmpeg_path, '-hide_banner', '-encoders'],
-                capture_output=True, text=True, timeout=5
-            )
-            # VideoToolbox 인코더가 있는지 확인
-            return 'h264_videotoolbox' in result.stdout
-        except Exception:
-            return False
+        결과는 프로세스 단위로 캐싱된다(ffmpeg 실행은 최초 1회만).
+        """
+        return _detect_hw_accel(self._get_ffmpeg_path())
     
     def _get_ffmpeg_path(self):
         """FFmpeg 경로 찾기 (로컬 bin 우선)"""
@@ -474,30 +547,11 @@ class YouTubeDownloader:
             return False, str(e), None
     
     def get_video_title_fast(self, url):
-        """유튜브 비디오 제목만 빠르게 추출 (큐 추가용)"""
-        try:
-            yt_dlp_path = self._get_yt_dlp_path()
-            cmd = [yt_dlp_path, '--get-title', '--no-warnings', url]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        """유튜브 비디오 제목만 빠르게 추출 (큐 추가용).
 
-            if result.returncode == 0:
-                title = result.stdout.strip()
-                return {
-                    'title': title if title else 'Unknown',
-                    'duration': 0,  # 나중에 다운로드 시 확인
-                    'uploader': 'Unknown',
-                    'view_count': 0,
-                    'upload_date': 'Unknown'
-                }
-            else:
-                print(f"yt-dlp error (returncode {result.returncode}): {result.stderr.strip()}")
-                return None
-        except subprocess.TimeoutExpired:
-            print(f"yt-dlp timeout (30s) fetching: {url}")
-            return None
-        except Exception as e:
-            print(f"비디오 제목 추출 오류: {e}")
-            return None
+        성공 결과는 프로세스 캐시에 저장되어 같은 URL 재조회 시 즉시 반환된다.
+        """
+        return _fetch_video_title(self._get_yt_dlp_path(), url)
 
     def get_video_info(self, url):
         """유튜브 비디오 정보 추출 (전체 정보)"""
@@ -643,7 +697,7 @@ class YouTubeDownloader:
 
 # 앱 메타 정보
 APP_NAME = "Video Tool"
-APP_VERSION = "6.0.5"
+APP_VERSION = "6.0.6"
 
 # 페이지 설정
 st.set_page_config(
@@ -655,14 +709,16 @@ st.set_page_config(
 
 # 세션 상태 초기화 (한 곳에서 통합 관리)
 def init_session_state():
+    # 가벼운 기본값만 이곳에서 초기화한다.
+    # 주의: 무거운 객체(VideoConverterCore/YouTubeDownloader)는 여기서 생성하지 않는다.
+    #       이 함수는 매 rerun마다 호출되는데, 딕셔너리 리터럴에 인스턴스를 두면
+    #       생성자가 매번 실행되어(ffmpeg/yt-dlp subprocess) 앱 전체가 느려진다.
     defaults = {
         'theme_mode': 'light',
         'selected_folder_path': "",
         'video_files_list': [],
         'file_selection_state': {},
-        'converter': VideoConverterCore(),
         'conversion_running': False,
-        'yt_downloader': YouTubeDownloader(),
         'yt_download_running': False,
         'yt_queue': [],
         'yt_queue_selection': {},
@@ -676,6 +732,12 @@ def init_session_state():
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+    # 무거운 객체는 세션에 없을 때만 지연 생성한다(세션당 1회).
+    if 'converter' not in st.session_state:
+        st.session_state['converter'] = VideoConverterCore()
+    if 'yt_downloader' not in st.session_state:
+        st.session_state['yt_downloader'] = YouTubeDownloader()
 
 init_session_state()
 
@@ -2154,13 +2216,14 @@ with tab2:
         st.markdown('<p class="vt-section-label">DOWNLOAD SETTINGS</p>', unsafe_allow_html=True)
 
         with st.container(key="yt_config_panel"):
-            # yt-dlp version info
-            current_ver = st.session_state['yt_downloader'].get_yt_dlp_version()
+            # yt-dlp version info (캐싱 — 매 rerun subprocess 실행 방지)
+            current_ver = _cached_yt_dlp_version(st.session_state['yt_downloader']._get_yt_dlp_path())
             ver_display = current_ver or 'Not found'
             st.markdown(f'<p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem;">yt-dlp <strong>v{ver_display}</strong></p>', unsafe_allow_html=True)
             if st.button("Update yt-dlp", key="ytdlp_update_btn", use_container_width=True):
                 with st.spinner("Updating yt-dlp..."):
                     success, output, new_ver = st.session_state['yt_downloader'].update_yt_dlp()
+                    _cached_yt_dlp_version.clear()  # 버전 캐시 무효화
                     if success:
                         st.success(f"Updated to {new_ver}" if new_ver else "yt-dlp is up to date!")
                     else:
