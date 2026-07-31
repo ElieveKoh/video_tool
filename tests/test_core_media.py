@@ -105,6 +105,68 @@ def main():
     check("로컬 길이 조회", abs(core.probe_duration(src) - 10.0) < 1.0,
           f"{core.probe_duration(src):.2f}s")
 
+    print("\n== 백그라운드 작업 (논블로킹 / 진행률 / 중단) ==")
+    import threading
+
+    # 30초짜리 소스로 변환 작업을 만들어, 시작 호출이 즉시 반환되는지 본다.
+    long_src = os.path.join(tmp, "long.mp4")
+    make_clip(long_src, seconds=30)
+
+    job = app.BackgroundJob('convert', 1, label='non-blocking test')
+    settings = {'codec': 'h264', 'resolution': '720p', 'quality': 'high',
+                'fps': 'original', 'scan': 'progressive',
+                'custom_video_br': None, 'custom_audio_br': None}
+    out_dir = os.path.join(tmp, "bg_out")
+    os.makedirs(out_dir, exist_ok=True)
+
+    t0 = time.time()
+    thread = threading.Thread(target=app._job_runner,
+                              args=(job, app._worker_convert,
+                                    (core, [long_src], out_dir, settings)),
+                              daemon=True)
+    thread.start()
+    launch_elapsed = time.time() - t0
+    # 예전 구조에서는 이 호출이 변환이 끝날 때까지(수 분) 반환되지 않았다
+    check("작업 시작이 즉시 반환됨", launch_elapsed < 0.5, f"{launch_elapsed:.3f}s")
+    check("시작 직후에는 아직 미완료", not job.snapshot()['done'])
+
+    # 진행률이 실제로 갱신되는지 (스레드가 job만 갱신)
+    progressed = False
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        snap = job.snapshot()
+        if snap['done']:
+            break
+        if snap['overall'] > 0 or snap['detail']:
+            progressed = True
+            break
+        time.sleep(0.2)
+    check("작업 중 진행 상태가 갱신됨", progressed,
+          str(job.snapshot())[:120])
+
+    # 중단: 플래그 + 프로세스 종료 → 워커가 종료 상태로 마감해야 한다
+    job.cancel.set()
+    core.stop_conversion()
+    deadline = time.time() + 30
+    while not job.snapshot()['done'] and time.time() < deadline:
+        time.sleep(0.2)
+    final = job.snapshot()
+    check("중단 요청이 작업을 종료시킴", final['done'], str(final)[:150])
+    check("중단이 결과에 반영됨", final['result_status'] in ('warning', 'error'),
+          str(final['result_status']))
+    thread.join(timeout=10)
+    check("워커 스레드가 정리됨", not thread.is_alive())
+
+    # 워커 예외도 반드시 종료 상태로 이어져야 한다(아니면 UI가 영원히 진행 중)
+    boom = app.BackgroundJob('convert', 1)
+    def _explode(j):
+        raise RuntimeError("의도된 예외")
+    t = threading.Thread(target=app._job_runner, args=(boom, _explode, ()), daemon=True)
+    t.start(); t.join(timeout=5)
+    bs = boom.snapshot()
+    check("워커 예외 시에도 done 처리", bs['done'] and bs['result_status'] == 'error',
+          str(bs['result_summary'])[:80])
+
     print("\n== 유튜브 제목 조회 (oEmbed) ==")
     dl = app.YouTubeDownloader()
     app._YT_TITLE_CACHE.clear()

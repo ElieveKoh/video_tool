@@ -823,9 +823,277 @@ class YouTubeDownloader:
             except subprocess.TimeoutExpired:
                 self.download_process.kill()
 
+class BackgroundJob:
+    """장시간 작업(변환/다운로드/무음화)의 진행 상태를 담는 객체.
+
+    설계 규칙: 워커 스레드는 이 객체만 갱신하고 Streamlit API(st.*)는 절대 호출하지
+    않는다. st.* 는 ScriptRunContext가 있는 스크립트 실행 스레드에서만 유효하다.
+    UI는 run_every 프래그먼트로 이 상태를 폴링해 그린다.
+
+    이 구조로 바꾼 이유: 이전에는 변환 루프가 스크립트 실행 자체를 점유해서
+    작업 중에는 화면이 먹통이 됐다. 그 상태에서 무언가를 클릭하면 실행 중인
+    스크립트가 중단되어 ffmpeg 프로세스가 고아가 되고 변환이 중복 실행됐다.
+    """
+
+    def __init__(self, kind, total, label=""):
+        self.kind = kind            # 'convert' | 'youtube' | 'mute'
+        self.total = max(1, int(total))
+        self.label = label
+        self.cancel = threading.Event()
+        self._lock = threading.Lock()
+        self._state = {
+            'overall': 0.0,
+            'status': '준비 중...',
+            'detail': '',
+            'log': [],
+            'done': False,
+            'result_status': None,
+            'result_summary': '',
+            'processed_urls': [],
+        }
+
+    def update(self, **kwargs):
+        with self._lock:
+            self._state.update(kwargs)
+
+    def add_log(self, line):
+        with self._lock:
+            self._state['log'].append(line)
+
+    def mark_url_processed(self, url):
+        with self._lock:
+            self._state['processed_urls'].append(url)
+
+    def finish(self, status, summary):
+        with self._lock:
+            self._state.update(
+                done=True, result_status=status, result_summary=summary,
+                overall=1.0, detail='',
+            )
+
+    def snapshot(self):
+        """UI가 읽는 불변 스냅샷."""
+        with self._lock:
+            snap = dict(self._state)
+            snap['log'] = list(snap['log'])
+            snap['processed_urls'] = list(snap['processed_urls'])
+        snap['kind'] = self.kind
+        snap['total'] = self.total
+        snap['label'] = self.label
+        snap['cancelled'] = self.cancel.is_set()
+        return snap
+
+
+def _fmt_clock(seconds):
+    seconds = int(max(0, seconds))
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
+def _output_name(base_name, codec, resolution):
+    if resolution != "original":
+        return f"{base_name}_{codec}_{resolution}.mp4"
+    return f"{base_name}_{codec}.mp4"
+
+
+def _worker_convert(job, converter, files, output_path, settings):
+    """로컬 파일 일괄 변환 (워커 스레드)."""
+    total = len(files)
+    success_count = failed_count = 0
+
+    for idx, input_file in enumerate(files):
+        if job.cancel.is_set():
+            break
+
+        file_name = os.path.basename(input_file)
+        out_name = _output_name(os.path.splitext(file_name)[0],
+                                settings['codec'], settings['resolution'])
+        output_file = os.path.join(output_path, out_name)
+
+        job.update(overall=idx / total, detail=file_name,
+                   status=f"변환 중 ({idx + 1}/{total})")
+        started = time.time()
+
+        def progress_cb(progress, current, duration, _idx=idx, _name=file_name):
+            elapsed = time.time() - started
+            eta = ''
+            if progress > 0.01:
+                remaining = int(elapsed / progress - elapsed)
+                if remaining > 0:
+                    eta = f" · 남은 시간 약 {_fmt_clock(remaining)}"
+            job.update(
+                overall=(_idx + progress) / total,
+                detail=f"{_name} — {progress * 100:.1f}% "
+                       f"({_fmt_clock(current)} / {_fmt_clock(duration)}){eta}",
+            )
+
+        ok, message = converter.convert_video(
+            input_file, output_file, settings['codec'], settings['resolution'],
+            settings['quality'], settings['fps'], settings['scan'],
+            settings['custom_video_br'], settings['custom_audio_br'], progress_cb,
+        )
+        if ok:
+            success_count += 1
+            job.add_log(f"✅ `{out_name}` ({int(time.time() - started)}초)")
+        else:
+            failed_count += 1
+            job.add_log(f"❌ `{file_name}` — {message}")
+        job.update(overall=(idx + 1) / total)
+
+    tail = f"성공 {success_count}건, 실패 {failed_count}건 · 저장 위치: {output_path}"
+    if job.cancel.is_set():
+        job.finish('warning', f"⏹️ 중단됨 — {tail}")
+    elif success_count:
+        job.finish('success' if failed_count == 0 else 'warning', f"🎉 변환 완료 — {tail}")
+    else:
+        job.finish('error', "❌ 모든 변환이 실패했습니다.")
+
+
+def _worker_youtube(job, converter, downloader, items, save_path, delete_original):
+    """유튜브 일괄 다운로드(+변환) (워커 스레드)."""
+    total = len(items)
+    success_count = failed_count = 0
+
+    for idx, item in enumerate(items):
+        if job.cancel.is_set():
+            break
+
+        url = item['url']
+        settings = item['settings']
+        title = item['info'].get('title', url)
+        base_overall = idx / total
+
+        job.update(overall=base_overall, status=f"다운로드 중 ({idx + 1}/{total})", detail=title)
+
+        def dl_cb(progress, _base=base_overall, _title=title):
+            # 항목당 앞 절반은 다운로드, 뒤 절반은 변환에 배분한다
+            job.update(overall=_base + (progress * 0.5) / total,
+                       detail=f"{_title} — 다운로드 {progress * 100:.1f}%")
+
+        ok, message, downloaded = downloader.download_video(url, save_path, dl_cb)
+        if not ok:
+            failed_count += 1
+            job.add_log(f"❌ 다운로드 실패 — {title}: {message}")
+            job.mark_url_processed(url)
+            job.update(overall=(idx + 1) / total)
+            continue
+
+        if settings.get('download_only', False):
+            success_count += 1
+            job.add_log(f"📥 다운로드 완료 — {os.path.basename(downloaded)}")
+            job.mark_url_processed(url)
+            job.update(overall=(idx + 1) / total)
+            continue
+
+        info = converter.get_video_info(downloaded)
+        current_codec = info['codec'] if info else 'unknown'
+        needs_conversion = (
+            current_codec != settings['codec']
+            or settings['resolution'] != "original"
+            or settings['fps'] != "original"
+            or settings['quality'] == "custom"
+        )
+
+        if not needs_conversion:
+            success_count += 1
+            job.add_log(f"ℹ️ 이미 원하는 포맷 — {os.path.basename(downloaded)}")
+            job.mark_url_processed(url)
+            job.update(overall=(idx + 1) / total)
+            continue
+
+        out_name = _output_name(os.path.splitext(os.path.basename(downloaded))[0],
+                                settings['codec'], settings['resolution'])
+        output_file = os.path.join(save_path, out_name)
+        job.update(status=f"변환 중 ({idx + 1}/{total})")
+
+        def conv_cb(progress, current, duration, _base=base_overall, _title=title):
+            job.update(
+                overall=_base + (0.5 + progress * 0.5) / total,
+                detail=f"{_title} — 변환 {progress * 100:.1f}% "
+                       f"({_fmt_clock(current)} / {_fmt_clock(duration)})",
+            )
+
+        conv_ok, conv_msg = converter.convert_video(
+            downloaded, output_file, settings['codec'], settings['resolution'],
+            settings['quality'], settings['fps'], settings['scan'],
+            settings['custom_video_br'], settings['custom_audio_br'], conv_cb,
+        )
+        if conv_ok:
+            success_count += 1
+            job.add_log(f"✅ 변환 완료 — {out_name}")
+            if delete_original:
+                try:
+                    os.remove(downloaded)
+                except Exception as e:
+                    job.add_log(f"⚠️ 원본 삭제 실패 — {e}")
+        else:
+            failed_count += 1
+            job.add_log(f"❌ 변환 실패 — {title}: {conv_msg}")
+
+        job.mark_url_processed(url)
+        job.update(overall=(idx + 1) / total)
+
+    tail = f"성공 {success_count}건, 실패 {failed_count}건 · 저장 위치: {save_path}"
+    if job.cancel.is_set():
+        job.finish('warning', f"⏹️ 중단됨 — {tail}")
+    elif success_count:
+        job.finish('success' if failed_count == 0 else 'warning', f"🎉 배치 완료 — {tail}")
+    else:
+        job.finish('error', "❌ 모든 작업이 실패했습니다.")
+
+
+def _worker_mute(job, converter, source, output_file):
+    """무음 비디오 생성 (워커 스레드)."""
+    job.update(status="길이 확인 중...", detail=os.path.basename(output_file))
+    duration = converter.probe_duration(source)
+    if duration <= 0:
+        job.add_log("ℹ️ 길이를 확인할 수 없어 처리된 시간으로 표시합니다.")
+    job.update(status="무음 비디오 생성 중...")
+
+    def progress_cb(progress, processed, speed):
+        suffix = f" · {speed}" if speed else ""
+        if progress is None:
+            job.update(detail=f"{_fmt_clock(processed)} 처리됨{suffix}")
+        else:
+            job.update(overall=progress,
+                       detail=f"{progress * 100:.1f}% "
+                              f"({_fmt_clock(processed)} / {_fmt_clock(duration)}){suffix}")
+
+    ok, message = converter.strip_audio(source, output_file, progress_cb,
+                                        total_duration=duration)
+    if job.cancel.is_set():
+        job.finish('warning', "⏹️ 중단됨")
+    elif ok:
+        size_mb = os.path.getsize(output_file) / (1024 * 1024)
+        job.add_log(f"📁 {output_file}")
+        job.finish('success',
+                   f"🔇 무음 비디오 저장 완료 — {os.path.basename(output_file)} ({size_mb:.1f} MB)")
+    else:
+        job.finish('error', f"❌ 실패: {message}")
+
+
+def _job_runner(job, target, args):
+    """워커 예외를 삼키지 않고 작업을 반드시 종료 상태로 만든다.
+
+    예외로 job이 done에 도달하지 못하면 UI가 영원히 진행 중으로 남는다.
+    """
+    try:
+        target(job, *args)
+    except Exception as e:
+        job.finish('error', f"❌ 작업 중 예외가 발생했습니다: {e}")
+    finally:
+        if not job.snapshot()['done']:
+            job.finish('error', "❌ 작업이 예기치 않게 종료되었습니다.")
+
+
+def start_background_job(job, target, args):
+    """작업을 데몬 스레드로 시작하고 세션에 등록한다."""
+    threading.Thread(target=_job_runner, args=(job, target, args), daemon=True).start()
+    st.session_state['job'] = job
+
+
 # 앱 메타 정보
 APP_NAME = "Video Tool"
-APP_VERSION = "6.1.0"
+APP_VERSION = "6.2.0"
 
 # 섹션(탭) 식별자. st.tabs 대신 session_state 기반 네비게이션을 쓰기 때문에
 # 라벨이 곧 상태값이다. 활성 섹션만 렌더하므로 rerun에도 선택이 유지된다.
@@ -853,8 +1121,7 @@ def init_session_state():
         'selected_folder_path': "",
         'video_files_list': [],
         'file_selection_state': {},
-        'conversion_running': False,
-        'yt_download_running': False,
+        'job': None,
         'yt_queue': [],
         'yt_queue_selection': {},
         'yt_save_folder_path': os.path.join(os.path.expanduser("~"), "Downloads"),
@@ -862,7 +1129,6 @@ def init_session_state():
         'sort_order': 'asc',
         'active_tab': TAB_CONVERT,
         'mute_save_folder_path': os.path.join(os.path.expanduser("~"), "Downloads"),
-        'mute_running': False,
         'yt_delete_original': True,
         'op_result': None,
         'yt_notice': None,
@@ -1237,16 +1503,16 @@ input:focus, textarea:focus { border-color: var(--m-primary) !important; box-sha
    주의: 이 CSS 문자열 안에 꺾쇠로 감싼 낱말을 쓰면 안 된다. st.html이 내용을
    HTML로 정제(sanitize)하기 때문에 태그처럼 보이는 조각이 있으면 style 블록이
    통째로 제거되어 앱 스타일이 전부 사라진다. */
-.st-key-stop_conversion_btn button, .st-key-yt_stop_batch button, .st-key-mute_stop_btn button {
+.st-key-job_stop_btn button {
     background: var(--m-error) !important;
     border-color: var(--m-error) !important;
     color: #ffffff !important;
     font-weight: 600 !important;
 }
-.st-key-stop_conversion_btn button:hover, .st-key-yt_stop_batch button:hover, .st-key-mute_stop_btn button:hover {
+.st-key-job_stop_btn button:hover {
     filter: brightness(1.12);
 }
-.st-key-stop_conversion_btn button:disabled, .st-key-yt_stop_batch button:disabled, .st-key-mute_stop_btn button:disabled {
+.st-key-job_stop_btn button:disabled {
     background: var(--m-surface-variant) !important;
     border-color: var(--border-default) !important;
     color: var(--text-muted) !important;
@@ -1340,6 +1606,25 @@ input:focus, textarea:focus { border-color: var(--m-primary) !important; box-sha
 }
 [data-theme="dark"] .st-key-nav_section [role="radiogroup"] > label:has(input:checked) p { color: #e2e8f0 !important; }
 .st-key-nav_section [role="radiogroup"]:has(input:disabled) { opacity: 0.55; }
+
+/* === 진행 중 작업 패널 (전역, 섹션 위에 표시) === */
+.st-key-job_panel > div {
+    background: var(--glass-bg-strong);
+    border: 0.5px solid var(--glass-border);
+    border-radius: 16px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+}
+.st-key-job_panel div[data-testid="stHorizontalBlock"] { align-items: center; }
+.vt-job__status {
+    margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em;
+    color: var(--text-primary); display: flex; align-items: center; min-height: 32px;
+}
+.st-key-job_panel .stProgress { margin-top: 4px; }
+.st-key-job_panel [data-testid="stCaptionContainer"] p { font-size: 12px !important; margin: 4px 0 0 !important; }
 
 /* === URL 입력 행 + 큐 툴바 === */
 /* 링크 칸 행: 입력과 삭제(✕)를 한 줄에 붙여 정렬 */
@@ -1665,6 +1950,41 @@ def open_file_dialog():
             return None
     return None
 
+# 섹션 전환에도 값을 유지해야 하는 위젯 key.
+# Streamlit은 '이번 실행에서 만들어지지 않은' 위젯의 state를 정리한다. 활성 섹션만
+# 렌더하기 때문에, 따로 보관하지 않으면 섹션을 옮길 때마다 그 섹션의 입력값과
+# 설정이 초기화된다. (파일/큐 체크박스는 file_selection_state·yt_queue_selection
+# 에서 스스로 복구하므로 여기 넣지 않는다.)
+_PINNED_WIDGET_KEYS = frozenset({
+    'mute_input_source', 'mute_output_name',
+    'download_only_checkbox', 'yt_delete_original',
+    'yt_codec', 'yt_resolution', 'yt_quality', 'yt_fps', 'yt_scan',
+    'yt_crf_slider', 'yt_custom_vbr', 'yt_custom_abr',
+    'vc_codec', 'vc_resolution', 'vc_quality', 'vc_fps', 'vc_scan',
+    'vc_crf', 'vc_custom_vbr', 'vc_custom_abr',
+})
+_PINNED_WIDGET_PREFIXES = ('yt_url_row_',)
+
+
+def _is_pinned_key(key):
+    return key in _PINNED_WIDGET_KEYS or key.startswith(_PINNED_WIDGET_PREFIXES)
+
+
+def restore_pinned_widgets():
+    """보관해둔 위젯 값을 복원한다. 위젯 생성 전에 호출해야 한다."""
+    for key, value in st.session_state.setdefault('_pinned', {}).items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def remember_pinned_widgets():
+    """이번 실행에 존재하는 위젯 값을 보관한다. 스크립트 마지막에 호출한다."""
+    stash = st.session_state.setdefault('_pinned', {})
+    for key in list(st.session_state.keys()):
+        if _is_pinned_key(key):
+            stash[key] = st.session_state[key]
+
+
 def _url_row_key(row_id):
     """URL 입력 행의 위젯 key. 행 id 기준이라 행을 지워도 다른 행 값이 밀리지 않는다."""
     return f"yt_url_row_{row_id}"
@@ -1806,22 +2126,6 @@ def scan_folder_files(folder_path):
     except Exception as e:
         st.error(f"Folder scan error: {e}")
 
-def finish_operation(status, summary, log_lines=None):
-    """장시간 작업 종료 처리: 결과를 세션에 저장하고 즉시 rerun한다.
-
-    작업 중에는 섹션 네비게이션을 잠그는데(중간 전환 시 스크립트 런이 끊겨
-    ffmpeg 프로세스가 고아가 되고 변환이 중복 실행된다), 작업이 끝난 뒤
-    rerun하지 않으면 잠긴 UI가 화면에 그대로 남아버린다. 여기서 rerun해
-    idle 상태로 되돌리고, 결과는 다음 런에서 렌더한다.
-    """
-    st.session_state['op_result'] = {
-        'status': status,
-        'summary': summary,
-        'log': log_lines or [],
-    }
-    st.rerun()
-
-
 def render_op_result():
     """직전 작업 결과를 렌더하고 소비한다(한 번만 표시)."""
     result = st.session_state.get('op_result')
@@ -1840,6 +2144,66 @@ def render_op_result():
         with st.expander(f"자세히 ({len(result['log'])}건)", expanded=False):
             for line in result['log']:
                 st.markdown(f"- {line}")
+
+
+@st.fragment(run_every="0.5s")
+def render_job_panel():
+    """진행 중인 작업 패널. 0.5초마다 이 프래그먼트만 다시 그린다.
+
+    프래그먼트라서 폴링이 페이지 전체를 다시 그리지 않는다. 실제 작업은
+    워커 스레드에서 돌기 때문에 이 동안에도 섹션 전환·설정 변경이 자유롭다.
+    """
+    job = st.session_state.get('job')
+    if job is None:
+        return
+
+    snap = job.snapshot()
+
+    with st.container(key="job_panel"):
+        head, stop_col = st.columns([5, 1])
+        with head:
+            st.markdown(f'<p class="vt-job__status">{_esc(snap["status"])}</p>',
+                        unsafe_allow_html=True)
+        with stop_col:
+            if st.button("■ Stop", key="job_stop_btn", use_container_width=True,
+                         disabled=snap['done'] or snap['cancelled']):
+                # 플래그만 세우고 실행 중인 프로세스를 종료시킨다(둘 다 st.* 미사용)
+                job.cancel.set()
+                st.session_state['converter'].stop_conversion()
+                st.session_state['yt_downloader'].stop_download()
+                st.rerun(scope="fragment")
+
+        st.progress(min(max(snap['overall'], 0.0), 1.0))
+        if snap['cancelled'] and not snap['done']:
+            st.caption("중단 중입니다...")
+        elif snap['detail']:
+            st.caption(snap['detail'])
+
+        if snap['log']:
+            with st.expander(f"진행 로그 ({len(snap['log'])}건)", expanded=False):
+                for line in snap['log'][-30:]:
+                    st.markdown(f"- {line}")
+
+    if snap['done']:
+        # 결과를 세션에 넘기고 전체 rerun으로 idle 상태로 복귀한다.
+        st.session_state['op_result'] = {
+            'status': snap['result_status'],
+            'summary': snap['result_summary'],
+            'log': snap['log'],
+        }
+        st.session_state['job'] = None
+
+        if snap['kind'] == 'youtube':
+            # 처리된 항목만 큐에서 제거한다(중단된 경우 남은 항목은 큐에 유지).
+            done_urls = set(snap['processed_urls'])
+            st.session_state['yt_queue'] = [
+                it for it in st.session_state['yt_queue'] if it['url'] not in done_urls
+            ]
+            for url in done_urls:
+                st.session_state['yt_queue_selection'].pop(url, None)
+                st.session_state.pop(_yt_check_key(url), None)
+
+        st.rerun()
 
 
 def resolve_writable_save_path(configured_path):
@@ -1864,286 +2228,6 @@ def resolve_writable_save_path(configured_path):
     os.makedirs(fallback_path, exist_ok=True)
     return fallback_path, f"⚠️ Save path is not writable: `{target_path}`. Switched to `{fallback_path}`."
 
-def convert_videos_realtime(selected_files, target_codec, target_resolution, quality_preset, selected_fps="original", selected_scan="progressive", custom_video_br=None, custom_audio_br=None):
-    """실시간 비디오 변환 함수"""
-    total_files = len(selected_files)
-    
-    # 출력 폴더 생성
-    output_folder = f"converted_{target_codec}"
-    current_dir = st.session_state.get('selected_folder_path', os.getcwd())
-    output_path = os.path.join(current_dir, output_folder)
-    
-    st.markdown(f"### 🎬 Conversion Progress")
-    st.info(f"📂 Output folder: {output_path}")
-    
-    overall_progress = st.progress(0)
-    current_file_info = st.empty()
-    current_file_progress = st.progress(0)
-    conversion_log = st.empty()
-    
-    successful_conversions = 0
-    failed_conversions = 0
-    result_log = []
-
-    for file_idx, input_file in enumerate(selected_files):
-        if not st.session_state.get('conversion_running', False):
-            break
-            
-        file_name = os.path.basename(input_file)
-        base_name = os.path.splitext(file_name)[0]
-        
-        # 출력 파일명 생성
-        if target_resolution != "original":
-            output_filename = f"{base_name}_{target_codec}_{target_resolution}.mp4"
-        else:
-            output_filename = f"{base_name}_{target_codec}.mp4"
-        
-        output_file = os.path.join(output_path, output_filename)
-        
-        # 현재 파일 정보 표시
-        current_file_info.markdown(f"**📁 [{file_idx + 1}/{total_files}] 변환 중:** `{file_name}`")
-        
-        # 진행률 콜백 함수 (예상 시간 포함)
-        conversion_start_time = time.time()
-
-        def progress_callback(progress, current_time, total_time):
-            current_file_progress.progress(progress)
-            min_current = int(current_time // 60)
-            sec_current = int(current_time % 60)
-            min_total = int(total_time // 60)
-            sec_total = int(total_time % 60)
-
-            # 예상 남은 시간 계산
-            if progress > 0.01:  # 1% 이상 진행되었을 때만 계산
-                elapsed = time.time() - conversion_start_time
-                estimated_total = elapsed / progress
-                remaining = int(estimated_total - elapsed)
-
-                if remaining > 0:
-                    min_remaining = remaining // 60
-                    sec_remaining = remaining % 60
-                    conversion_log.text(
-                        f"⏱️ 진행률: {progress*100:.1f}% | {min_current:02d}:{sec_current:02d} / {min_total:02d}:{sec_total:02d} | "
-                        f"예상 남은 시간: {min_remaining}분 {sec_remaining}초"
-                    )
-                else:
-                    conversion_log.text(f"⏱️ 진행률: {progress*100:.1f}% | {min_current:02d}:{sec_current:02d} / {min_total:02d}:{sec_total:02d}")
-            else:
-                conversion_log.text(f"⏱️ 진행률: {progress*100:.1f}% | {min_current:02d}:{sec_current:02d} / {min_total:02d}:{sec_total:02d}")
-        
-        # 현재 파일의 정보 표시
-        try:
-            video_info = st.session_state['converter'].get_video_info(input_file)
-            if video_info:
-                width, height = video_info['width'], video_info['height']
-                codec = video_info['codec']
-                duration_min = int(video_info['duration'] // 60)
-                duration_sec = int(video_info['duration'] % 60)
-                bitrate_mbps = video_info['bitrate'] // 1000000 if video_info['bitrate'] > 0 else 0
-                
-                st.write(f"📺 Resolution: {width}x{height} | Codec: {codec} | Duration: {duration_min:02d}:{duration_sec:02d} | Bitrate: {bitrate_mbps}Mbps")
-        except Exception as e:
-            print(f"비디오 정보 표시 오류: {e}")
-        
-        # 변환 실행
-        start_time = time.time()
-        success, message = st.session_state['converter'].convert_video(
-            input_file, output_file, target_codec, target_resolution, quality_preset, selected_fps, selected_scan, custom_video_br, custom_audio_br, progress_callback
-        )
-        end_time = time.time()
-        
-        if success:
-            successful_conversions += 1
-            elapsed_time = int(end_time - start_time)
-            line = f"✅ `{output_filename}` ({elapsed_time}s)"
-            st.success(f"✅ Conversion complete: `{output_filename}` (Duration: {elapsed_time}s)")
-        else:
-            failed_conversions += 1
-            line = f"❌ `{file_name}` — {message}"
-            st.error(f"❌ Conversion failed: `{file_name}` - {message}")
-        result_log.append(line)
-
-        # 전체 진행률 업데이트
-        overall_progress.progress((file_idx + 1) / total_files)
-
-    # 변환 완료
-    st.session_state['conversion_running'] = False
-
-    if successful_conversions > 0:
-        finish_operation(
-            'success' if failed_conversions == 0 else 'warning',
-            f"🎉 변환 완료 — 성공 {successful_conversions}건, 실패 {failed_conversions}건 · 저장 위치: {output_path}",
-            result_log,
-        )
-    else:
-        finish_operation('error', "❌ 모든 변환이 실패했습니다.", result_log)
-
-def batch_download_and_convert(selected_items):
-    """유튜브 배치 다운로드 + 변환 함수"""
-    total_videos = len(selected_items)
-
-    st.markdown(f"### 🎬 Batch Download + Conversion Progress ({total_videos} videos)")
-
-    # 저장 경로 설정
-    configured_path = st.session_state.get('yt_save_folder_path')
-    save_path, save_path_warning = resolve_writable_save_path(configured_path)
-    st.session_state['yt_save_folder_path'] = save_path
-
-    st.info(f"📂 Save location: {save_path}")
-    if save_path_warning:
-        st.warning(save_path_warning)
-
-    # 전체 진행률
-    overall_progress = st.progress(0)
-    current_video_info = st.empty()
-
-    # 개별 비디오 진행률
-    download_progress = st.progress(0)
-    conversion_progress = st.progress(0)
-    status_text = st.empty()
-
-    successful_count = 0
-    failed_count = 0
-    result_log = []
-
-    for video_idx, item in enumerate(selected_items):
-        if not st.session_state.get('yt_download_running', False):
-            break
-
-        url = item['url']
-        info = item['info']
-        settings = item['settings']
-
-        # 현재 비디오 정보 표시
-        current_video_info.markdown(f"**📥 [{video_idx + 1}/{total_videos}] {info['title']}**")
-
-        # 다운로드 진행률 콜백
-        def download_progress_callback(progress):
-            overall = (video_idx + progress * 0.5) / total_videos
-            overall_progress.progress(overall)
-            download_progress.progress(progress)
-
-        # 다운로드 실행
-        status_text.markdown("**📥 Downloading from YouTube...**")
-        success, message, downloaded_file = st.session_state['yt_downloader'].download_video(
-            url, save_path, download_progress_callback
-        )
-
-        if not success:
-            st.error(f"❌ Download failed: {info['title']} - {message}")
-            result_log.append(f"❌ 다운로드 실패 — {info['title']}: {message}")
-            failed_count += 1
-            overall_progress.progress((video_idx + 1) / total_videos)
-            continue
-
-        st.success(f"✅ Downloaded: {os.path.basename(downloaded_file)}")
-
-        # 다운로드가 끝난 뒤 yt-dlp --dump-json으로 유튜브에 재조회하던 코드를 제거했다.
-        # 이미 로컬 파일이 있으므로 네트워크 왕복(항목당 5~20초)은 순수 낭비다.
-        # 표시에 필요한 duration은 아래 ffprobe 결과에서 얻는다.
-
-        # Download Only 모드면 변환 건너뛰기
-        if settings.get('download_only', False):
-            st.info("📥 Download Only mode - Skipping conversion")
-            result_log.append(f"📥 다운로드만 — {os.path.basename(downloaded_file)}")
-            successful_count += 1
-            overall_progress.progress((video_idx + 1) / total_videos)
-            download_progress.progress(0)
-            continue
-
-        # 변환 필요 여부 확인
-        video_info = st.session_state['converter'].get_video_info(downloaded_file)
-        current_codec = video_info['codec'] if video_info else 'unknown'
-
-        needs_conversion = (
-            current_codec != settings['codec'] or
-            settings['resolution'] != "original" or
-            settings['fps'] != "original" or
-            settings['quality'] == "custom"
-        )
-
-        if needs_conversion:
-            status_text.markdown("**🎬 Converting video...**")
-
-            # 출력 파일명 생성
-            base_name = os.path.splitext(os.path.basename(downloaded_file))[0]
-            if settings['resolution'] != "original":
-                output_filename = f"{base_name}_{settings['codec']}_{settings['resolution']}.mp4"
-            else:
-                output_filename = f"{base_name}_{settings['codec']}.mp4"
-
-            output_file = os.path.join(save_path, output_filename)
-
-            # 변환 진행률 콜백
-            def conversion_progress_callback(progress, current_time, total_time):
-                overall = (video_idx + 0.5 + progress * 0.5) / total_videos
-                overall_progress.progress(overall)
-                conversion_progress.progress(progress)
-
-                min_current = int(current_time // 60)
-                sec_current = int(current_time % 60)
-                min_total = int(total_time // 60)
-                sec_total = int(total_time % 60)
-
-                status_text.markdown(f"**🎬 Converting: {progress*100:.1f}% | {min_current:02d}:{sec_current:02d} / {min_total:02d}:{sec_total:02d}**")
-
-            # 변환 실행
-            conversion_success, conversion_message = st.session_state['converter'].convert_video(
-                downloaded_file,
-                output_file,
-                settings['codec'],
-                settings['resolution'],
-                settings['quality'],
-                settings['fps'],
-                settings['scan'],
-                settings['custom_video_br'],
-                settings['custom_audio_br'],
-                conversion_progress_callback
-            )
-
-            if conversion_success:
-                st.success(f"✅ Converted: {output_filename}")
-                result_log.append(f"✅ 변환 — {output_filename}")
-                successful_count += 1
-
-                # 원본 파일 삭제 (설정에 따름 — 단일 다운로드 경로와 동일하게 동작)
-                if st.session_state.get('yt_delete_original', True):
-                    try:
-                        os.remove(downloaded_file)
-                    except Exception as e:
-                        print(f"원본 파일 삭제 실패: {e}")
-            else:
-                st.error(f"❌ Conversion failed: {info['title']} - {conversion_message}")
-                result_log.append(f"❌ 변환 실패 — {info['title']}: {conversion_message}")
-                failed_count += 1
-        else:
-            st.info("ℹ️ Already desired format. Skipping conversion.")
-            result_log.append(f"ℹ️ 이미 원하는 포맷 — {os.path.basename(downloaded_file)}")
-            successful_count += 1
-
-        # 전체 진행률 업데이트
-        overall_progress.progress((video_idx + 1) / total_videos)
-        download_progress.progress(0)
-        conversion_progress.progress(0)
-
-    # 완료
-    st.session_state['yt_download_running'] = False
-
-    # 배치 완료 후 큐 비우기 (체크박스 위젯 state도 함께 정리)
-    for item in st.session_state['yt_queue']:
-        st.session_state.pop(_yt_check_key(item['url']), None)
-    st.session_state['yt_queue'] = []
-    st.session_state['yt_queue_selection'] = {}
-
-    if successful_count > 0:
-        finish_operation(
-            'success' if failed_count == 0 else 'warning',
-            f"🎉 배치 완료 — 성공 {successful_count}건, 실패 {failed_count}건 · 저장 위치: {save_path}",
-            result_log,
-        )
-    else:
-        finish_operation('error', "❌ 모든 작업이 실패했습니다.", result_log)
-
 # 테마 적용 스크립트 — 1회 적용, MutationObserver/setTimeout 제거
 theme_html = f"""
 <script>
@@ -2162,18 +2246,17 @@ theme_html = f"""
 """
 components.html(theme_html, height=0)
 
+# 섹션 전환으로 사라진 위젯 값을 되돌린다. 첫 위젯(테마 토글)보다 먼저 실행해야 한다.
+restore_pinned_widgets()
+
 # 작업 진행 여부. 진행 중에는 rerun을 유발하는 컨트롤(섹션 전환, 테마 토글)을 잠근다.
 # 작업 중 rerun이 걸리면 실행 중인 스크립트 런이 끊겨 ffmpeg 프로세스가 고아가 되고
 # 변환이 중복 실행된다. 예전 코드는 "탭을 전환하지 마세요"라는 경고문으로 때웠다.
-APP_BUSY = (
-    st.session_state.get('conversion_running', False)
-    or st.session_state.get('yt_download_running', False)
-    or st.session_state.get('mute_running', False)
-)
+APP_BUSY = st.session_state.get('job') is not None
 
 # 테마 토글 버튼 (스타일은 통합 CSS에 정의됨)
 theme_icon = "☀" if st.session_state['theme_mode'] == 'dark' else "☾"
-if st.button(theme_icon, key="theme_toggle", help="Toggle Light/Dark Mode", disabled=APP_BUSY):
+if st.button(theme_icon, key="theme_toggle", help="Toggle Light/Dark Mode"):
     new_mode = 'dark' if st.session_state['theme_mode'] == 'light' else 'light'
     st.session_state['theme_mode'] = new_mode
     st.toast(f"{'Dark' if new_mode == 'dark' else 'Light'} mode", icon="☀️" if new_mode == 'light' else "🌙")
@@ -2261,14 +2344,15 @@ active_tab = st.radio(
     key="nav_section",
     horizontal=True,
     label_visibility="collapsed",
-    disabled=APP_BUSY,
 )
 st.session_state['active_tab'] = active_tab
 
+# 진행 중인 작업 패널 — 모든 섹션 위에 표시해서 섹션을 옮겨도 진행 상황이 보인다.
+# 작업이 없을 때는 프래그먼트를 아예 만들지 않아 불필요한 폴링이 없다.
 if APP_BUSY:
-    st.caption("⏳ 작업이 진행 중입니다. 완료될 때까지 섹션 전환이 잠깁니다.")
+    render_job_panel()
 
-# 직전 장시간 작업의 결과를 표시한다(작업 종료 시 rerun하므로 여기서 렌더된다).
+# 직전 작업 결과를 표시한다(작업 종료 시 rerun하므로 여기서 렌더된다).
 render_op_result()
 
 
@@ -2321,15 +2405,15 @@ if active_tab == TAB_CONVERT:
         with st.container(key="config_panel"):
             selected_codec = st.selectbox(
                 "Codec", options=list(codec_options.keys()),
-                format_func=lambda x: codec_options[x], index=0
+                format_func=lambda x: codec_options[x], index=0, key="vc_codec"
             )
             selected_resolution = st.selectbox(
                 "Resolution", options=list(resolution_options.keys()),
-                format_func=lambda x: resolution_options[x], index=0
+                format_func=lambda x: resolution_options[x], index=0, key="vc_resolution"
             )
             selected_quality = st.selectbox(
                 "Quality", options=list(quality_presets.keys()),
-                format_func=lambda x: quality_presets[x], index=1
+                format_func=lambda x: quality_presets[x], index=1, key="vc_quality"
             )
 
             if selected_quality == "crf":
@@ -2337,25 +2421,27 @@ if active_tab == TAB_CONVERT:
                 custom_video_br = st.slider(
                     "CRF Value (lower = better quality):",
                     min_value=0, max_value=51,
-                    value=crf_defaults.get(selected_codec, 23), step=1
+                    value=crf_defaults.get(selected_codec, 23), step=1, key="vc_crf"
                 )
 
             with st.expander("Advanced Settings"):
                 selected_fps = st.selectbox(
                     "Frame Rate", options=list(fps_options.keys()),
-                    format_func=lambda x: fps_options[x], index=0
+                    format_func=lambda x: fps_options[x], index=0, key="vc_fps"
                 )
                 selected_scan = st.selectbox(
                     "Scan Type", options=list(scan_options.keys()),
-                    format_func=lambda x: scan_options[x], index=0
+                    format_func=lambda x: scan_options[x], index=0, key="vc_scan"
                 )
 
                 if selected_quality == "custom":
                     custom_video_br = st.number_input(
-                        "Video Bitrate (Mbps):", min_value=1, max_value=100, value=10, step=1
+                        "Video Bitrate (Mbps):", min_value=1, max_value=100, value=10, step=1,
+                        key="vc_custom_vbr"
                     )
                     custom_audio_br = st.number_input(
-                        "Audio Bitrate (kbps):", min_value=64, max_value=320, value=192, step=32
+                        "Audio Bitrate (kbps):", min_value=64, max_value=320, value=192, step=32,
+                        key="vc_custom_abr"
                     )
 
         # st.expander의 본문은 접혀 있어도 항상 실행되므로 selected_fps/selected_scan은
@@ -2397,16 +2483,14 @@ if active_tab == TAB_CONVERT:
                     else:
                         st.error("❌ Invalid folder path.")
 
-        # Start/Stop buttons
+        # 시작 버튼. 중단은 전역 작업 패널의 Stop 하나로 통일했다.
         if st.session_state['video_files_list']:
-            col_start, col_stop = st.columns([3, 1])
-            with col_start:
-                start_conversion = st.button("▶ Start Conversion", type="primary", use_container_width=True, disabled=st.session_state['conversion_running'])
-            with col_stop:
-                stop_conversion = st.button("■ Stop", use_container_width=True, disabled=not st.session_state['conversion_running'], key="stop_conversion_btn")
+            start_conversion = st.button(
+                "▶ Start Conversion", type="primary", use_container_width=True,
+                disabled=APP_BUSY, key="start_conversion_btn",
+            )
         else:
             start_conversion = False
-            stop_conversion = False
 
     with right_col:
         st.markdown('<p class="vt-section-label">PROJECT FILES</p>', unsafe_allow_html=True)
@@ -2498,28 +2582,35 @@ if active_tab == TAB_CONVERT:
         selected_files = [f for f in st.session_state['video_files_list']
                           if st.session_state['file_selection_state'].get(f, True)]
 
-    # --- Conversion logic (full width, after both columns) ---
-    if stop_conversion:
-        st.session_state['converter'].stop_conversion()
-        st.session_state['conversion_running'] = False
-        st.toast("Conversion stopped", icon="⏹️")
+    # --- 변환 시작 (백그라운드 스레드) ---
+    if start_conversion and not APP_BUSY and selected_files:
+        _output_path = os.path.join(
+            st.session_state.get('selected_folder_path') or os.getcwd(),
+            f"converted_{selected_codec}",
+        )
+        os.makedirs(_output_path, exist_ok=True)
+        _job = BackgroundJob('convert', len(selected_files),
+                             label=f"로컬 변환 {len(selected_files)}건")
+        start_background_job(_job, _worker_convert, (
+            st.session_state['converter'],
+            list(selected_files),
+            _output_path,
+            {
+                'codec': selected_codec, 'resolution': selected_resolution,
+                'quality': selected_quality, 'fps': selected_fps,
+                'scan': selected_scan, 'custom_video_br': custom_video_br,
+                'custom_audio_br': custom_audio_br,
+            },
+        ))
+        st.toast(f"변환 시작 — {len(selected_files)}개 파일", icon="🎬")
         st.rerun()
-
-    if start_conversion and not st.session_state['conversion_running'] and selected_files:
-        with st.spinner(f"⚙️ Preparing {len(selected_files)} file(s) for conversion..."):
-            st.session_state['conversion_running'] = True
-        st.toast(f"Starting conversion — {len(selected_files)} file(s)", icon="🎬")
-        st.rerun()
-
-    if st.session_state.get('conversion_running', False) and selected_files:
-        convert_videos_realtime(selected_files, selected_codec, selected_resolution, selected_quality, selected_fps, selected_scan, custom_video_br, custom_audio_br)
 
     # --- Status bar ---
     _codec_display = selected_codec.upper()
     _res_display = selected_resolution.upper() if selected_resolution != "original" else "ORIGINAL"
     _quality_display = selected_quality.upper()
     _selected_count = len(selected_files)
-    _run_state = "RUNNING" if st.session_state.get('conversion_running', False) else "IDLE"
+    _run_state = "RUNNING" if APP_BUSY else "IDLE"
     st.html(f'''
     <div class="vt-status-bar">
         <div class="vt-status-bar__group">
@@ -2564,7 +2655,6 @@ if active_tab == TAB_YOUTUBE:
     yt_custom_video_br = None
     yt_custom_audio_br = None
     start_batch = False
-    stop_batch = False
 
     # 2-column layout (matches Tab 1)
     yt_left_col, yt_right_col = st.columns([2, 3])
@@ -2669,7 +2759,7 @@ if active_tab == TAB_YOUTUBE:
                 (st.warning if _notice['type'] == 'warning' else st.success)(_notice['msg'])
 
             # --- URL 입력: 여러 링크를 행으로 모은 뒤 한 번에 큐로 보낸다 ---
-            _busy = st.session_state.get('yt_download_running', False)
+            _busy = APP_BUSY
             _rows = st.session_state['yt_url_rows']
 
             with st.container(key="yt_url_rows"):
@@ -2805,35 +2895,34 @@ if active_tab == TAB_YOUTUBE:
         if st.session_state['yt_queue']:
             _sel_count = sum(1 for item in st.session_state['yt_queue']
                              if st.session_state['yt_queue_selection'].get(item['url'], True))
-            _dl_running = st.session_state.get('yt_download_running', False)
-            col_start, col_stop = st.columns([3, 1])
-            with col_start:
-                start_batch = st.button(
-                    f"▶ Batch Download ({_sel_count})" if _sel_count else "▶ Batch Download",
-                    type="primary", use_container_width=True,
-                    disabled=_dl_running or _sel_count == 0,
-                    key="yt_start_batch",
-                )
-            with col_stop:
-                stop_batch = st.button(
-                    "■ Stop", use_container_width=True,
-                    disabled=not _dl_running,
-                    key="yt_stop_batch",
-                )
+            start_batch = st.button(
+                f"▶ Batch Download ({_sel_count})" if _sel_count else "▶ Batch Download",
+                type="primary", use_container_width=True,
+                disabled=APP_BUSY or _sel_count == 0,
+                key="yt_start_batch",
+            )
 
-    # --- Download logic (full width, after both columns) ---
-    if stop_batch:
-        st.session_state['yt_downloader'].stop_download()
-        st.session_state['converter'].stop_conversion()
-        st.session_state['yt_download_running'] = False
-        st.toast("Batch operation stopped", icon="⏹️")
-        st.rerun()
-
-    if start_batch and not st.session_state.get('yt_download_running', False):
-        with st.spinner("Preparing batch download/conversion..."):
-            st.session_state['yt_download_running'] = True
-        st.toast("Batch download started", icon="📥")
-        st.rerun()
+    # --- 배치 다운로드 시작 (백그라운드 스레드) ---
+    if start_batch and not APP_BUSY:
+        _items = [item for item in st.session_state['yt_queue']
+                  if st.session_state['yt_queue_selection'].get(item['url'], True)]
+        if _items:
+            _save_path, _warn = resolve_writable_save_path(
+                st.session_state.get('yt_save_folder_path'))
+            st.session_state['yt_save_folder_path'] = _save_path
+            if _warn:
+                st.session_state['yt_notice'] = {'type': 'warning', 'msg': _warn}
+            _job = BackgroundJob('youtube', len(_items),
+                                 label=f"유튜브 {len(_items)}건")
+            start_background_job(_job, _worker_youtube, (
+                st.session_state['converter'],
+                st.session_state['yt_downloader'],
+                [dict(it) for it in _items],
+                _save_path,
+                st.session_state.get('yt_delete_original', True),
+            ))
+            st.toast(f"배치 다운로드 시작 — {len(_items)}건", icon="📥")
+            st.rerun()
 
     # 링크 → 큐 추가. 'Download Now'는 제거했다 — 배치 다운로드와 역할이 같아
     # 두 버튼이 헷갈렸고, 링크가 여러 개일 때 '지금 다운로드'의 의미도 모호했다.
@@ -2873,12 +2962,6 @@ if active_tab == TAB_YOUTUBE:
                 # 고칠 수 있게 하고, 이유를 바로 보여준다.
                 for note in notes:
                     st.warning(note)
-
-    if st.session_state.get('yt_download_running', False) and st.session_state['yt_queue']:
-        selected_items = [item for item in st.session_state['yt_queue']
-                         if st.session_state['yt_queue_selection'].get(item['url'], True)]
-        if selected_items:
-            batch_download_and_convert(selected_items)
 
 
 # Tab 3: Mute Video (무음 비디오 생성)
@@ -2951,82 +3034,32 @@ if active_tab == TAB_MUTE:
         ''')
         if sys.platform == 'darwin':
             if st.button("Change Folder", key="mute_folder_select", use_container_width=True,
-                         disabled=st.session_state['mute_running']):
+                         disabled=APP_BUSY):
                 chosen = open_folder_dialog(scan=False)
                 if chosen:
                     st.session_state['mute_save_folder_path'] = chosen
                     st.rerun()
 
-        mc_run, mc_stop = st.columns([3, 1])
-        with mc_run:
-            mute_start = st.button(
-                "🔇 Generate Muted Video", type="primary", key="mute_generate_btn",
-                disabled=not mute_input or st.session_state['mute_running'],
-                use_container_width=True,
-            )
-        with mc_stop:
-            mute_stop = st.button(
-                "■ Stop", key="mute_stop_btn", use_container_width=True,
-                disabled=not st.session_state['mute_running'],
-            )
+        # 중단은 전역 작업 패널의 Stop 하나로 통일했다.
+        mute_start = st.button(
+            "🔇 Generate Muted Video", type="primary", key="mute_generate_btn",
+            disabled=not mute_input or APP_BUSY, use_container_width=True,
+        )
 
-        if mute_stop:
-            st.session_state['converter'].stop_conversion()
-            st.session_state['mute_running'] = False
-            st.toast("Mute 작업을 중단했습니다", icon="⏹️")
-            st.rerun()
-
-        if mute_start:
-            st.session_state['mute_running'] = True
-            st.rerun()
-
-        if st.session_state['mute_running'] and mute_input:
-            save_path, path_warning = resolve_writable_save_path(st.session_state['mute_save_folder_path'])
+        if mute_start and mute_input:
+            save_path, path_warning = resolve_writable_save_path(
+                st.session_state['mute_save_folder_path'])
             st.session_state['mute_save_folder_path'] = save_path
             if path_warning:
-                st.warning(path_warning)
-            output_file = os.path.join(save_path, mute_output_name)
-
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-
-            with st.spinner("길이 확인 중..."):
-                total_duration = st.session_state['converter'].probe_duration(mute_input)
-            if total_duration <= 0:
-                st.caption("ℹ️ 길이를 확인할 수 없어 처리된 시간으로 진행 상황을 표시합니다.")
-
-            def mute_progress(progress, processed, speed):
-                # progress가 None이면(길이 미확인) 처리 시간/속도만 보여준다.
-                if progress is not None:
-                    progress_bar.progress(min(progress, 1.0))
-                    status_text.markdown(
-                        f"**🔇 {progress*100:.1f}%** — "
-                        f"{int(processed // 60):02d}:{int(processed % 60):02d} / "
-                        f"{int(total_duration // 60):02d}:{int(total_duration % 60):02d}"
-                        + (f" | {speed}" if speed else "")
-                    )
-                else:
-                    status_text.markdown(
-                        f"**🔇 처리 중** — {int(processed // 60):02d}:{int(processed % 60):02d} 처리됨"
-                        + (f" | {speed}" if speed else "")
-                    )
-
-            success, msg = st.session_state['converter'].strip_audio(
-                mute_input, output_file, mute_progress, total_duration=total_duration
-            )
-
-            st.session_state['mute_running'] = False
-
-            if success:
-                progress_bar.progress(1.0)
-                file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
-                finish_operation(
-                    'success',
-                    f"🔇 무음 비디오 저장 완료 — {mute_output_name} ({file_size_mb:.1f} MB)",
-                    [f"📁 {output_file}"],
-                )
-            else:
-                finish_operation('error', f"❌ 실패: {msg}")
+                st.session_state['yt_notice'] = {'type': 'warning', 'msg': path_warning}
+            _job = BackgroundJob('mute', 1, label=mute_output_name)
+            start_background_job(_job, _worker_mute, (
+                st.session_state['converter'],
+                mute_input,
+                os.path.join(save_path, mute_output_name),
+            ))
+            st.toast("무음 비디오 생성 시작", icon="🔇")
+            st.rerun()
 
 # 푸터
 st.markdown("---")
@@ -3038,3 +3071,6 @@ st.html(f"""
 """)
 
 
+# 이번 실행의 위젯 값을 보관한다. 섹션을 옮기면 렌더되지 않은 위젯의 state가
+# 정리되므로, 여기서 보관해두고 다음 실행 시작에 복원한다.
+remember_pinned_widgets()

@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 from streamlit.testing.v1 import AppTest
 
@@ -70,8 +71,10 @@ def main():
     at.radio(key="nav_section").set_value(MUTE).run()
     assert_no_exception(at, "Mute 전환")
     btns = [b.key for b in at.button if b.key]
-    check("Mute 생성/중단/폴더 버튼", all(k in btns for k in
-          ("mute_generate_btn", "mute_stop_btn", "mute_folder_select")), str(sorted(btns)))
+    check("Mute 생성/폴더 버튼", all(k in btns for k in
+          ("mute_generate_btn", "mute_folder_select")), str(sorted(btns)))
+    # 중단은 전역 작업 패널의 Stop 하나로 통일했다
+    check("Mute 전용 Stop 버튼 없음", "mute_stop_btn" not in btns)
 
     at.button(key="theme_toggle").click().run()
     check("rerun 후 Mute 유지", at.session_state["active_tab"] == MUTE)
@@ -197,6 +200,36 @@ def main():
         check("추가 후 대기 링크 0개", "(" not in _add_btn.label, _add_btn.label)
         check("추가 후 Add to Queue 비활성", _add_btn.disabled is True)
 
+    print("\n== 섹션 전환 시 입력값 유지 ==")
+    # 활성 섹션만 렌더하는 구조의 부작용: Streamlit은 이번 실행에 없는 위젯의 state를
+    # 정리하므로, 보관/복원하지 않으면 섹션을 옮길 때마다 입력값과 설정이 초기화된다.
+    at3 = AppTest.from_file(APP, default_timeout=120)
+    at3.run()
+    at3.radio(key="nav_section").set_value(MUTE).run()
+    at3.text_input(key="mute_input_source").set_value("http://example.com/keep.mp4").run()
+    at3.radio(key="nav_section").set_value(YOUTUBE).run()
+    _r = [w.key for w in at3.text_input if w.key and w.key.startswith("yt_url_row_")]
+    at3.text_input(key=_r[0]).set_value("https://youtu.be/KEEP").run()
+    at3.selectbox(key="yt_resolution").set_value("720p").run()
+    at3.radio(key="nav_section").set_value(CONVERT).run()
+    at3.selectbox(key="vc_codec").set_value("h265").run()
+
+    at3.radio(key="nav_section").set_value(MUTE).run()
+    assert_no_exception(at3, "Mute 재방문")
+    check("Mute 입력값 유지", at3.text_input(key="mute_input_source").value ==
+          "http://example.com/keep.mp4", repr(at3.text_input(key="mute_input_source").value))
+
+    at3.radio(key="nav_section").set_value(YOUTUBE).run()
+    _r2 = [w.key for w in at3.text_input if w.key and w.key.startswith("yt_url_row_")]
+    check("YouTube 링크 유지", at3.text_input(key=_r2[0]).value == "https://youtu.be/KEEP",
+          repr(at3.text_input(key=_r2[0]).value))
+    check("YouTube 설정 유지", at3.selectbox(key="yt_resolution").value == "720p",
+          repr(at3.selectbox(key="yt_resolution").value))
+
+    at3.radio(key="nav_section").set_value(CONVERT).run()
+    check("Convert 설정 유지", at3.selectbox(key="vc_codec").value == "h265",
+          repr(at3.selectbox(key="vc_codec").value))
+
     print("\n== 큐 툴바 / 배치 다운로드 위계 ==")
     # st.rerun() 잔여 노드 없이 검증하기 위해 새 인스턴스에서 큐를 직접 주입한다.
     at2 = AppTest.from_file(APP, default_timeout=120)
@@ -231,8 +264,8 @@ def main():
         check("Batch Download = primary", batch.proto.type == "primary", str(batch.proto.type))
         check("선택 개수 표시", "(2)" in batch.label, batch.label)
         check("작업 전 활성", batch.disabled is False)
-    stop = btn(at2, "yt_stop_batch")
-    check("Stop 은 작업 전 비활성", stop is not None and stop.disabled is True)
+    # Stop 은 전역 작업 패널로 통일했다(섹션마다 따로 두지 않는다)
+    check("섹션별 Stop 버튼 없음", btn(at2, "yt_stop_batch") is None)
 
     # 중복 URL은 제목 조회(네트워크) 전에 걸러진다 → 네트워크 없이 검증 가능
     _rows2 = [w.key for w in at2.text_input if w.key and w.key.startswith("yt_url_row_")]
@@ -274,26 +307,34 @@ def main():
     at.session_state["mute_save_folder_path"] = tmp
     at.run()
     check("작업 전 네비게이션 활성", at.radio(key="nav_section").disabled is False)
+    check("작업 전 job 없음", at.session_state["job"] is None)
 
+    # 실행. AppTest는 run_every 프래그먼트의 재실행을 동기로 따라가므로
+    # '즉시 반환'을 시간으로 재는 것은 의미가 없다(논블로킹 자체는
+    # test_core_media.py 의 스레드 레벨 테스트에서 검증한다).
+    # 여기서는 완료 결과가 표시되고 상태가 정리되는지를 본다.
+    seen_success = []
     at.button(key="mute_generate_btn").click().run()
     assert_no_exception(at, "Mute 실행")
+    seen_success += [m.value for m in at.success]
+
+    deadline = time.time() + 90
+    while at.session_state["job"] is not None and time.time() < deadline:
+        at.run()
+        seen_success += [m.value for m in at.success]
+    check("작업 완료 후 job 정리됨", at.session_state["job"] is None)
 
     out = os.path.join(tmp, "flow_muted.mp4")
     audio = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
-         "-of", "csv=p=0", out], capture_output=True, text=True).stdout.strip() if os.path.exists(out) else "?"
+         "-of", "csv=p=0", out], capture_output=True, text=True).stdout.strip() \
+        if os.path.exists(out) else "?"
 
     check("출력 파일 생성", os.path.exists(out))
     check("오디오 제거됨", audio == "", f"audio streams={audio!r}")
-    check("작업 후 running 해제", at.session_state["mute_running"] is False)
-    # 작업 중에는 네비게이션을 잠그므로, 완료 시 rerun하지 않으면 잠긴 UI가 남는다
-    check("작업 후 네비게이션 재활성", at.radio(key="nav_section").disabled is False)
+    check("완료 결과 표시", any("무음 비디오 저장 완료" in m for m in seen_success),
+          str(seen_success[-3:]))
     check("작업 후 섹션 유지", at.session_state["active_tab"] == MUTE)
-    msgs = [s.value for s in at.success]
-    check("완료 결과 표시", any("무음 비디오 저장 완료" in m for m in msgs), str(msgs))
-
-    at.run()
-    check("결과는 1회만 표시", at.session_state["op_result"] is None)
 
     return failures
 
