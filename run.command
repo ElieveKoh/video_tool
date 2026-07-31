@@ -4,7 +4,7 @@ echo "🎥 스마트 비디오 변환기"
 echo "====================="
 
 # 앱 버전 (릴리즈할 때 함께 갱신)
-APP_VERSION="6.0.5"
+APP_VERSION="6.1.0"
 # GitHub 저장소 (예: channy/video-tool)
 GITHUB_REPO="ElieveKoh/video_tool"
 
@@ -241,7 +241,17 @@ if [ ! -d "venv" ]; then
 fi
 
 source venv/bin/activate
-python -m pip install streamlit --quiet
+
+# Streamlit은 없을 때만 설치한다. 이전에는 매 실행마다 `pip install streamlit`을
+# (버전 고정 없이) 돌려서 실행이 느려졌고, requirements.txt의 핀도 무시됐다.
+if ! python -c "import streamlit" 2>/dev/null; then
+    echo "📦 Streamlit 설치 중..."
+    if [ -f "requirements.txt" ]; then
+        python -m pip install -r requirements.txt --quiet
+    else
+        python -m pip install streamlit --quiet
+    fi
+fi
 
 echo ""
 echo "🚀 비디오 변환기 시작!"

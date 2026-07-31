@@ -16,51 +16,113 @@ from threading import Thread
 import re
 import signal
 import sys
+import concurrent.futures
 import functools
+import hashlib
+import urllib.request
+import urllib.error
+import urllib.parse
+from html import escape as _esc
 from datetime import datetime
+
+
+def _file_check_key(path):
+    """파일 체크박스의 안정적인 위젯 key.
+
+    key에 토글 카운터를 섞으면 '전체 선택' 한 번에 모든 체크박스가 재생성되어
+    파일이 많을 때 매우 느려진다. key는 파일 경로로 고정하고, 일괄 토글은
+    session_state에 직접 대입해 처리한다.
+    """
+    return "file_check_" + hashlib.md5(path.encode('utf-8')).hexdigest()[:16]
+
+
+def _yt_check_key(url):
+    """유튜브 큐 체크박스의 안정적인 위젯 key(URL 기준).
+
+    인덱스 기반 key는 항목 삭제 시 나머지 항목의 체크 상태가 밀리는 버그를 만든다.
+    """
+    return "yt_queue_check_" + hashlib.md5(url.encode('utf-8')).hexdigest()[:16]
 
 
 # 유튜브 제목 조회 결과 캐시(성공만 저장). 같은 URL 재조회 시 네트워크 호출 없이 즉시 반환.
 _YT_TITLE_CACHE = {}
 _YT_TITLE_CACHE_LOCK = threading.Lock()
 
+# ffprobe 결과 캐시. 키는 (경로, mtime, size)이므로 파일이 변경되면 자동 무효화된다.
+_VIDEO_INFO_CACHE = {}
+
+
+def _fetch_title_via_oembed(url):
+    """YouTube oEmbed 엔드포인트로 제목/업로더만 가져온다.
+
+    yt-dlp는 제목 한 줄을 위해 extractor 전체(webpage + player response + 포맷 목록)를
+    실행하기 때문에 5~20초가 걸린다. oEmbed는 단순 JSON GET이라 보통 0.5초 이내다.
+    비공개/연령제한 영상은 실패하므로 호출자가 yt-dlp로 폴백해야 한다.
+    """
+    endpoint = "https://www.youtube.com/oembed?" + urllib.parse.urlencode(
+        {'url': url, 'format': 'json'}
+    )
+    req = urllib.request.Request(endpoint, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+    title = (data.get('title') or '').strip()
+    if not title:
+        return None
+    return {
+        'title': title,
+        'duration': 0,
+        'uploader': (data.get('author_name') or 'Unknown').strip(),
+        'view_count': 0,
+        'upload_date': 'Unknown',
+    }
+
 
 def _fetch_video_title(yt_dlp_path, url):
-    """yt-dlp로 제목만 빠르게 추출. 성공 결과는 프로세스 캐시에 저장한다.
+    """제목만 빠르게 추출. 성공 결과는 프로세스 캐시에 저장한다.
 
-    - `--no-playlist`로 재생목록 전체 열거를 막아 속도를 높인다.
-    - `--socket-timeout`으로 네트워크 지연 시 조기 실패하도록 한다.
-    - 실패(None)는 캐시하지 않아 일시적 오류가 고정되지 않는다.
+    1차: YouTube oEmbed(HTTP GET, ~0.5s)
+    2차: yt-dlp `--print title` (oEmbed가 못 다루는 URL/비공개 영상용)
+    실패(None)는 캐시하지 않아 일시적 오류가 고정되지 않는다.
     """
     with _YT_TITLE_CACHE_LOCK:
         if url in _YT_TITLE_CACHE:
             return _YT_TITLE_CACHE[url]
-    try:
-        cmd = [
-            yt_dlp_path, '--get-title', '--no-warnings',
-            '--no-playlist', '--socket-timeout', '15', url,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            title = result.stdout.strip()
-            info = {
-                'title': title if title else 'Unknown',
-                'duration': 0,
-                'uploader': 'Unknown',
-                'view_count': 0,
-                'upload_date': 'Unknown',
-            }
-            with _YT_TITLE_CACHE_LOCK:
-                _YT_TITLE_CACHE[url] = info
-            return info
-        print(f"yt-dlp error (returncode {result.returncode}): {result.stderr.strip()}")
-        return None
-    except subprocess.TimeoutExpired:
-        print(f"yt-dlp timeout (30s) fetching: {url}")
-        return None
-    except Exception as e:
-        print(f"비디오 제목 추출 오류: {e}")
-        return None
+
+    info = None
+    if 'youtube.com' in url or 'youtu.be' in url:
+        try:
+            info = _fetch_title_via_oembed(url)
+        except Exception as e:
+            print(f"oEmbed 실패, yt-dlp로 폴백: {e}")
+
+    if info is None:
+        try:
+            cmd = [
+                yt_dlp_path, '--print', 'title', '--no-warnings',
+                '--no-playlist', '--skip-download',
+                '--socket-timeout', '10', url,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            if result.returncode == 0:
+                title = result.stdout.strip().split('\n')[0].strip()
+                info = {
+                    'title': title if title else 'Unknown',
+                    'duration': 0,
+                    'uploader': 'Unknown',
+                    'view_count': 0,
+                    'upload_date': 'Unknown',
+                }
+            else:
+                print(f"yt-dlp error (returncode {result.returncode}): {result.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            print(f"yt-dlp timeout (20s) fetching: {url}")
+        except Exception as e:
+            print(f"비디오 제목 추출 오류: {e}")
+
+    if info is not None:
+        with _YT_TITLE_CACHE_LOCK:
+            _YT_TITLE_CACHE[url] = info
+    return info
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -179,11 +241,27 @@ class VideoConverterCore:
         return 'ffprobe'  # 시스템 PATH에서 찾기
         
     def get_video_info(self, file_path):
-        """FFprobe를 사용해서 비디오 정보 추출"""
+        """FFprobe를 사용해서 비디오 정보 추출.
+
+        같은 파일에 대해 (경로, mtime, size)를 키로 결과를 메모이즈한다.
+        메모이즈 이전에는 파일 1건 변환에 ffprobe 프로세스가 3번 떴다
+        (호출자 → convert_video → get_codec_options). 파일이 바뀌면
+        mtime/size가 달라져 자동으로 무효화된다.
+        """
+        cache_key = None
+        try:
+            stat = os.stat(file_path)
+            cache_key = (file_path, stat.st_mtime, stat.st_size)
+            if cache_key in _VIDEO_INFO_CACHE:
+                return _VIDEO_INFO_CACHE[cache_key]
+        except OSError:
+            # URL 등 stat이 불가능한 입력은 캐시하지 않는다.
+            pass
+
         try:
             # 로컬 바이너리 우선 사용
             ffprobe_path = self._get_ffprobe_path()
-            
+
             cmd = [
                 ffprobe_path, '-v', 'error', '-select_streams', 'v:0',
                 '-show_entries', 'stream=width,height,codec_name,bit_rate',
@@ -197,14 +275,19 @@ class VideoConverterCore:
                 
                 video_stream = data.get('streams', [{}])[0]
                 format_info = data.get('format', {})
-                
-                return {
+
+                info = {
                     'width': int(video_stream.get('width', 0)),
                     'height': int(video_stream.get('height', 0)),
                     'codec': video_stream.get('codec_name', 'unknown'),
                     'duration': float(format_info.get('duration', 0)),
                     'bitrate': int(format_info.get('bit_rate', 0))
                 }
+                if cache_key is not None:
+                    if len(_VIDEO_INFO_CACHE) > 512:
+                        _VIDEO_INFO_CACHE.clear()
+                    _VIDEO_INFO_CACHE[cache_key] = info
+                return info
         except Exception as e:
             print(f"비디오 정보 추출 오류: {e}")
             return None
@@ -422,19 +505,46 @@ class VideoConverterCore:
             except subprocess.TimeoutExpired:
                 self.current_process.kill()
 
-    def strip_audio(self, input_source, output_file, progress_callback=None):
+    def probe_duration(self, input_source):
+        """로컬 파일 또는 URL의 길이(초)를 반환. 알 수 없으면 0.
+
+        ffprobe는 http(s) 입력도 처리하므로 URL도 시도한다. 원격 probe는
+        느릴 수 있어 타임아웃을 짧게 두고, 실패하면 0을 돌려 호출자가
+        불확정 진행 표시로 폴백하게 한다.
+        """
+        if not input_source.startswith(('http://', 'https://')):
+            info = self.get_video_info(input_source)
+            return info['duration'] if info else 0
+        try:
+            cmd = [
+                self._get_ffprobe_path(), '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                input_source,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            if result.returncode == 0:
+                return float(result.stdout.strip() or 0)
+        except Exception as e:
+            print(f"원격 duration 조회 실패(불확정 진행률로 진행): {e}")
+        return 0
+
+    def strip_audio(self, input_source, output_file, progress_callback=None, total_duration=None):
         """비디오에서 오디오 트랙 제거 (비디오는 재인코딩 없이 복사)
+
         input_source: 로컬 파일 경로 또는 URL (ffmpeg가 직접 처리)
+        total_duration: 미리 구한 길이(초). None이면 여기서 조회한다.
+        progress_callback(progress, processed_seconds, speed):
+            길이를 아는 경우 progress는 0~1, 모르면 None이 넘어간다.
+            이전 구현은 URL일 때 duration을 0으로 두고 `total_duration > 0`
+            가드에 걸려 콜백을 한 번도 호출하지 않았다(진행률이 안 보이던 원인).
         """
         try:
+            self.conversion_stopped = False
             ffmpeg_path = self._get_ffmpeg_path()
-            is_url = input_source.startswith(('http://', 'https://'))
 
-            # 로컬 파일이면 duration 추출 가능, URL이면 불가
-            total_duration = 0
-            if not is_url:
-                video_info = self.get_video_info(input_source)
-                total_duration = video_info['duration'] if video_info else 0
+            if total_duration is None:
+                total_duration = self.probe_duration(input_source)
 
             cmd = [
                 ffmpeg_path,
@@ -446,7 +556,9 @@ class VideoConverterCore:
                 output_file
             ]
 
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            out_dir = os.path.dirname(output_file)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
 
             process = subprocess.Popen(
                 cmd,
@@ -455,24 +567,40 @@ class VideoConverterCore:
                 universal_newlines=True,
                 bufsize=1
             )
+            self.current_process = process
 
+            speed = ''
+            tail = []
             while True:
+                if self.conversion_stopped:
+                    process.terminate()
+                    return False, "사용자에 의해 중단됨"
+
                 output = process.stdout.readline()
                 if output == '' and process.poll() is not None:
                     break
-                if output.strip().startswith('out_time_ms=') and total_duration > 0:
+
+                line = output.strip()
+                if not line:
+                    continue
+                tail.append(line)
+                if len(tail) > 30:
+                    tail.pop(0)
+
+                if line.startswith('speed='):
+                    speed = line.split('=', 1)[1].strip()
+                elif line.startswith('out_time_ms=') and progress_callback:
                     try:
-                        time_ms = int(output.strip().split('=')[1])
-                        progress = min((time_ms / 1000000) / total_duration, 1.0)
-                        if progress_callback:
-                            progress_callback(progress)
+                        processed = int(line.split('=')[1]) / 1000000
+                        progress = min(processed / total_duration, 1.0) if total_duration > 0 else None
+                        progress_callback(progress, processed, speed)
                     except Exception:
                         pass
 
             return_code = process.wait()
             if return_code == 0 and os.path.exists(output_file):
                 return True, "Audio removed successfully"
-            return False, "FFmpeg returned error"
+            return False, "FFmpeg 오류: " + ('\n'.join(tail[-6:]) or "알 수 없는 오류")
         except Exception as e:
             return False, str(e)
 
@@ -697,7 +825,14 @@ class YouTubeDownloader:
 
 # 앱 메타 정보
 APP_NAME = "Video Tool"
-APP_VERSION = "6.0.6"
+APP_VERSION = "6.1.0"
+
+# 섹션(탭) 식별자. st.tabs 대신 session_state 기반 네비게이션을 쓰기 때문에
+# 라벨이 곧 상태값이다. 활성 섹션만 렌더하므로 rerun에도 선택이 유지된다.
+TAB_CONVERT = "🎬 Convert"
+TAB_YOUTUBE = "📥 YouTube"
+TAB_MUTE = "🔇 Mute"
+TAB_LABELS = [TAB_CONVERT, TAB_YOUTUBE, TAB_MUTE]
 
 # 페이지 설정
 st.set_page_config(
@@ -722,12 +857,17 @@ def init_session_state():
         'yt_download_running': False,
         'yt_queue': [],
         'yt_queue_selection': {},
-        'yt_url_input': "",
         'yt_save_folder_path': os.path.join(os.path.expanduser("~"), "Downloads"),
         'sort_by': 'name',
         'sort_order': 'asc',
-        'vc_toggle_counter': 0,
-        'yt_toggle_counter': 0,
+        'active_tab': TAB_CONVERT,
+        'mute_save_folder_path': os.path.join(os.path.expanduser("~"), "Downloads"),
+        'mute_running': False,
+        'yt_delete_original': True,
+        'op_result': None,
+        'yt_notice': None,
+        'yt_url_rows': [0],
+        'yt_url_row_seq': 1,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -745,9 +885,17 @@ init_session_state()
 def get_app_css():
     """CSS 문자열을 한 번만 생성하고 캐싱 — 매 rerun마다 재파싱 방지"""
     return """
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
 <style>
+/* 폰트는 CSS @import로 불러온다. st.html은 내용을 HTML로 정제하므로 stylesheet
+   링크 태그는 제거되어 버린다(그 탓에 Material 아이콘이 폰트 없이
+   'queue_play_next' 같은 리거처 이름 그대로 노출됐다). @import는 CSS라 살아남는다.
+   @import는 반드시 스타일시트 최상단에 있어야 적용된다.
+
+   경고: 이 문자열 안에서는 꺾쇠(less-than + 낱말) 조합을 절대 쓰지 말 것.
+   태그처럼 보이는 조각이 하나라도 있으면 정제 과정에서 style 블록이 통째로
+   삭제되어 앱 스타일 전체가 사라진다. tests/test_css_integrity.py 가 이를 검사한다. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
 :root {
     /* Material 3 light tokens */
     --m-surface: #fcf8fb;
@@ -1021,24 +1169,42 @@ footer { visibility: hidden !important; }
 }
 
 /* === Buttons (Lumina pill + active scale) === */
+/* primary는 불투명 단색으로 — 반투명 그라디언트는 연해 보여서
+   비활성 버튼으로 오인됐다. 상단 섹션 네비게이션의 활성 pill과 같은 색을 쓴다. */
 button[kind="primary"] {
-    background: linear-gradient(135deg, rgba(59,130,246,0.60), rgba(37,99,235,0.72)) !important;
-    border: 0.5px solid rgba(255,255,255,0.55) !important;
-    color: #ffffff !important;
+    background: var(--m-primary) !important;
+    border: 0.5px solid var(--m-primary) !important;
+    color: var(--m-on-primary) !important;
     font-weight: 600 !important;
     border-radius: 14px !important;
-    box-shadow: 0 8px 22px rgba(37,99,235,0.20) !important;
+    box-shadow: 0 6px 18px rgba(0,88,188,0.28) !important;
     transition: transform 140ms ease, filter 140ms ease, background-color 140ms ease !important;
 }
-button[kind="primary"]:hover { filter: brightness(1.08); }
+button[kind="primary"]:hover { filter: brightness(1.12); }
 button[kind="primary"]:active { transform: scale(0.98); }
-[data-theme="dark"] button[kind="primary"] {
-    background: linear-gradient(135deg, rgba(30, 41, 59, 0.84), rgba(51, 65, 85, 0.86)) !important;
-    border: 0.5px solid rgba(148, 163, 184, 0.52) !important;
-    color: #e2e8f0 !important;
-    box-shadow: 0 8px 18px rgba(2, 6, 23, 0.42) !important;
+/* 비활성은 명확히 회색으로 — 활성 상태와 헷갈리지 않게 */
+button[kind="primary"]:disabled {
+    background: var(--m-surface-variant) !important;
+    border-color: var(--border-default) !important;
+    color: var(--text-muted) !important;
+    box-shadow: none !important;
 }
-[data-theme="dark"] button[kind="primary"]:hover { filter: brightness(1.10); }
+/* 다크모드 primary는 M3 다크 팔레트대로 밝은 파랑 + 어두운 글자.
+   주변 패널/보조 버튼이 모두 슬레이트 계열이라, primary도 슬레이트로 두면
+   주 동작이 배경에 묻혀 구분되지 않는다. */
+[data-theme="dark"] button[kind="primary"] {
+    background: var(--m-primary) !important;
+    border: 0.5px solid var(--m-primary) !important;
+    color: var(--m-on-primary) !important;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45) !important;
+}
+[data-theme="dark"] button[kind="primary"]:hover { filter: brightness(1.08); }
+[data-theme="dark"] button[kind="primary"]:disabled {
+    background: rgba(30, 41, 59, 0.55) !important;
+    border-color: rgba(148, 163, 184, 0.20) !important;
+    color: var(--text-muted) !important;
+    box-shadow: none !important;
+}
 button[kind="secondary"] {
     background: rgba(0,0,0,0.05) !important;
     border: 0.5px solid rgba(255,255,255,0.40) !important;
@@ -1065,26 +1231,28 @@ input, textarea, [data-baseweb="select"] > div {
     border-color: rgba(255,255,255,0.10) !important;
 }
 input:focus, textarea:focus { border-color: var(--m-primary) !important; box-shadow: 0 0 0 1px var(--m-primary) !important; }
-button[key="stop_conversion_btn"], button[key="yt_stop_batch"] { background-color: #ff4b4b !important; color: white !important; }
-button[key="stop_conversion_btn"]:hover, button[key="yt_stop_batch"]:hover { background-color: #ff0000 !important; }
-button[key="stop_conversion_btn"]:disabled, button[key="yt_stop_batch"]:disabled { background-color: #cccccc !important; color: #666666 !important; }
-.stProgress > div > div > div > div { background: linear-gradient(90deg, var(--m-primary), var(--m-tertiary)); border-radius: 9999px; height: 6px; }
-/* === Tabs (Lumina underline-pill) === */
-.stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 0.5px solid var(--border-default); padding: 0; margin-bottom: 16px; }
-.stTabs [data-baseweb="tab"] {
-    height: 40px; padding: 0 16px;
-    background-color: transparent !important;
-    border: none !important;
-    color: var(--text-muted) !important;
-    font-weight: 500 !important; font-size: 14px !important; letter-spacing: -0.01em;
-    border-radius: 10px 10px 0 0 !important;
-    transition: all 200ms ease;
+/* Stop 버튼 — 셀렉터를 .st-key-* 로 수정했다.
+   Streamlit은 위젯 key를 button 속성이 아니라 컨테이너 클래스(st-key-KEY 형태)로
+   내보내므로, 예전의 button[key="..."] 규칙은 한 번도 적용되지 않았다.
+   주의: 이 CSS 문자열 안에 꺾쇠로 감싼 낱말을 쓰면 안 된다. st.html이 내용을
+   HTML로 정제(sanitize)하기 때문에 태그처럼 보이는 조각이 있으면 style 블록이
+   통째로 제거되어 앱 스타일이 전부 사라진다. */
+.st-key-stop_conversion_btn button, .st-key-yt_stop_batch button, .st-key-mute_stop_btn button {
+    background: var(--m-error) !important;
+    border-color: var(--m-error) !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
 }
-.stTabs [data-baseweb="tab"]:hover { color: var(--text-primary) !important; background: rgba(255,255,255,0.30) !important; }
-[data-theme="dark"] .stTabs [data-baseweb="tab"]:hover { background: rgba(255,255,255,0.05) !important; }
-.stTabs [aria-selected="true"] { color: var(--m-primary) !important; font-weight: 600 !important; border-bottom: 2px solid var(--m-primary) !important; }
-/* "NEW" badge on Mute Video tab */
-button[data-baseweb="tab"]:nth-child(3)::after { content: 'NEW'; display: inline-block; font-size: 9px; font-weight: 700; color: var(--m-on-primary); background: linear-gradient(135deg, var(--m-primary), var(--m-tertiary)); padding: 2px 6px; border-radius: 6px; margin-left: 6px; vertical-align: middle; letter-spacing: 0.05em; }
+.st-key-stop_conversion_btn button:hover, .st-key-yt_stop_batch button:hover, .st-key-mute_stop_btn button:hover {
+    filter: brightness(1.12);
+}
+.st-key-stop_conversion_btn button:disabled, .st-key-yt_stop_batch button:disabled, .st-key-mute_stop_btn button:disabled {
+    background: var(--m-surface-variant) !important;
+    border-color: var(--border-default) !important;
+    color: var(--text-muted) !important;
+}
+.stProgress > div > div > div > div { background: linear-gradient(90deg, var(--m-primary), var(--m-tertiary)); border-radius: 9999px; height: 6px; }
+/* (st.tabs 제거됨 — 섹션 네비게이션 스타일은 .st-key-nav_section 참조) */
 
 /* Theme toggle button — moved into TopNav area */
 .st-key-theme_toggle { position: fixed !important; top: 14px; right: 16px; z-index: 1001; }
@@ -1114,9 +1282,151 @@ button[data-baseweb="tab"]:nth-child(3)::after { content: 'NEW'; display: inline
 .st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) p, .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) p { margin: 0 !important; padding: 0 !important; line-height: 1.4 !important; font-size: 14px !important; }
 .st-key-queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) .stCheckbox, .st-key-yt_queue_panel div[data-testid="stHorizontalBlock"]:has(.stCheckbox) .stCheckbox { margin: 0 !important; padding: 0 !important; }
 
+/* === File row (single html node per file — widget count 축소용) === */
+.vt-file-row {
+    display: grid;
+    grid-template-columns: 3fr 1fr 1.5fr;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--text-primary);
+    min-height: 32px;
+}
+.vt-file-row__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vt-file-row__size { text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.vt-file-row__date { text-align: center; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* === Section nav — st.tabs 대체 (st.radio를 세그먼트 pill로 스타일링) === */
+.st-key-nav_section { margin-bottom: 16px; }
+.st-key-nav_section [role="radiogroup"] {
+    display: inline-flex;
+    gap: 4px;
+    background: var(--glass-bg);
+    border: 0.5px solid var(--glass-border);
+    border-radius: 14px;
+    padding: 4px;
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    box-shadow: var(--glass-shadow);
+}
+/* 라디오 동그라미 숨기고 라벨 자체를 pill로 만든다 */
+.st-key-nav_section [role="radiogroup"] > label {
+    margin: 0 !important;
+    padding: 8px 18px !important;
+    border-radius: 10px !important;
+    cursor: pointer;
+    transition: background 160ms ease, color 160ms ease !important;
+}
+.st-key-nav_section [role="radiogroup"] > label > div:first-child { display: none !important; }
+.st-key-nav_section [role="radiogroup"] > label p {
+    margin: 0 !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.01em !important;
+    color: var(--text-secondary) !important;
+    white-space: nowrap;
+}
+.st-key-nav_section [role="radiogroup"] > label:hover { background: rgba(255,255,255,0.45); }
+.st-key-nav_section [role="radiogroup"] > label:hover p { color: var(--text-primary) !important; }
+[data-theme="dark"] .st-key-nav_section [role="radiogroup"] > label:hover { background: rgba(255,255,255,0.07); }
+.st-key-nav_section [role="radiogroup"] > label:has(input:checked) {
+    background: var(--m-primary);
+    box-shadow: 0 4px 14px rgba(0,88,188,0.22);
+}
+.st-key-nav_section [role="radiogroup"] > label:has(input:checked) p { color: var(--m-on-primary) !important; }
+[data-theme="dark"] .st-key-nav_section [role="radiogroup"] > label:has(input:checked) {
+    background: rgba(51, 65, 85, 0.92);
+}
+[data-theme="dark"] .st-key-nav_section [role="radiogroup"] > label:has(input:checked) p { color: #e2e8f0 !important; }
+.st-key-nav_section [role="radiogroup"]:has(input:disabled) { opacity: 0.55; }
+
+/* === URL 입력 행 + 큐 툴바 === */
+/* 링크 칸 행: 입력과 삭제(✕)를 한 줄에 붙여 정렬 */
+.st-key-yt_url_rows div[data-testid="stHorizontalBlock"] { gap: 4px; align-items: center; }
+.st-key-yt_url_rows div[data-testid="stHorizontalBlock"] > div[data-testid="column"] { display: flex; align-items: center; }
+.st-key-yt_url_rows div[data-testid="stVerticalBlock"] { gap: 6px; }
+.st-key-yt_url_add_row { margin-top: 2px; }
+.st-key-yt_url_add_row button {
+    color: var(--m-primary) !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
+    padding: 4px 6px !important;
+}
+[data-theme="dark"] .st-key-yt_url_add_row button { color: var(--accent) !important; }
+
+/* 큐 관리 버튼은 주 동작(Add to Queue / Download Now)보다 작고 약하게 —
+   같은 크기면 같은 위계로 읽힌다 */
+.vt-queue-toolbar__title {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--text-secondary);
+    margin: 0; display: flex; align-items: center; min-height: 30px;
+}
+/* 배경은 있고(칩처럼 눌러지는 게 보이게), 크기·굵기로만 주 동작과 구분한다 */
+.st-key-yt_select_all button, .st-key-yt_clear_queue button {
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    color: var(--text-secondary) !important;
+    background: var(--m-surface-variant) !important;
+    border: 0.5px solid var(--border-default) !important;
+    padding: 3px 10px !important;
+    min-height: 28px !important;
+    border-radius: 8px !important;
+    transition: background 140ms ease, color 140ms ease !important;
+}
+.st-key-yt_select_all button:hover {
+    color: var(--m-on-primary) !important;
+    background: var(--m-primary) !important;
+    border-color: var(--m-primary) !important;
+}
+.st-key-yt_clear_queue button:hover {
+    color: #ffffff !important;
+    background: var(--m-error) !important;
+    border-color: var(--m-error) !important;
+}
+[data-theme="dark"] .st-key-yt_select_all button, [data-theme="dark"] .st-key-yt_clear_queue button {
+    background: rgba(51, 65, 85, 0.70) !important;
+    border-color: rgba(148, 163, 184, 0.28) !important;
+    color: #cbd5e1 !important;
+}
+[data-theme="dark"] .st-key-yt_select_all button:hover {
+    background: rgba(71, 92, 122, 0.95) !important;
+    color: #ffffff !important;
+}
+[data-theme="dark"] .st-key-yt_clear_queue button:hover {
+    background: rgba(155, 40, 40, 0.90) !important;
+    border-color: rgba(255, 138, 138, 0.40) !important;
+    color: #ffffff !important;
+}
+
+/* 큐 항목 삭제(✕) / 링크 칸 삭제(✕) — 아이콘 크기로 축소.
+   '＋ 링크 칸 추가'는 컬럼 밖에 있으므로 column 하위로 한정해 제외한다. */
+.st-key-yt_url_rows div[data-testid="column"] button,
+[class*="st-key-yt_remove_"] button {
+    color: var(--text-muted) !important;
+    padding: 2px 6px !important;
+    min-height: 26px !important;
+}
+.st-key-yt_url_rows div[data-testid="column"] button:hover,
+[class*="st-key-yt_remove_"] button:hover {
+    color: var(--m-error) !important;
+    background: rgba(186,26,26,0.07) !important;
+}
+
 /* Sort buttons (Lumina label-caps) */
-button[key="sort_name"], button[key="sort_size"], button[key="sort_date"] { border: none !important; background: transparent !important; box-shadow: none !important; outline: none !important; padding: 8px 6px !important; font-weight: 700 !important; font-size: 12px !important; letter-spacing: 0.05em !important; text-transform: uppercase !important; color: var(--text-secondary) !important; border-radius: 8px !important; }
-button[key="sort_name"]:hover, button[key="sort_size"]:hover, button[key="sort_date"]:hover { color: var(--m-primary) !important; background: rgba(0,88,188,0.06) !important; }
+/* 정렬 헤더 버튼 — 위와 같은 이유로 .st-key-*로 수정 */
+.st-key-sort_name button, .st-key-sort_size button, .st-key-sort_date button {
+    border: none !important; background: transparent !important; box-shadow: none !important;
+    outline: none !important; padding: 8px 6px !important; font-weight: 700 !important;
+    font-size: 12px !important; letter-spacing: 0.05em !important; text-transform: uppercase !important;
+    color: var(--text-secondary) !important; border-radius: 8px !important;
+}
+.st-key-sort_name button:hover, .st-key-sort_size button:hover, .st-key-sort_date button:hover {
+    color: var(--m-primary) !important; background: rgba(0,88,188,0.06) !important;
+}
+.st-key-toggle_all_header button {
+    font-size: 12px !important; font-weight: 700 !important; padding: 8px 4px !important;
+}
 
 /* Expander */
 [data-testid="stExpander"] { border: 0.5px solid var(--border-default) !important; border-radius: 12px !important; background: rgba(255,255,255,0.30) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); overflow: visible !important; }
@@ -1260,17 +1570,21 @@ st.html(get_app_css())
 
 
 # 공통 함수들
-def open_folder_dialog():
-    """플랫폼별 폴더 선택 다이얼로그 (macOS는 osascript, 기타는 수동 입력)"""
+def open_folder_dialog(scan=True):
+    """플랫폼별 폴더 선택 다이얼로그 (macOS는 osascript, 기타는 수동 입력)
+
+    scan=False면 소스 폴더로 채택하지 않고 경로만 반환한다(저장 위치 선택용).
+    """
     import sys
 
     # macOS에서만 osascript 사용
     if sys.platform == 'darwin':
         try:
-            apple_script = '''
+            prompt = "Select folder containing video files" if scan else "Select save folder"
+            apple_script = f'''
             tell application "System Events"
                 activate
-                set selectedFolder to choose folder with prompt "Select folder containing video files"
+                set selectedFolder to choose folder with prompt "{prompt}"
                 return POSIX path of selectedFolder
             end tell
             '''
@@ -1285,8 +1599,9 @@ def open_folder_dialog():
             if result.returncode == 0:
                 folder_selected = result.stdout.strip()
                 if folder_selected and os.path.exists(folder_selected):
-                    st.session_state['selected_folder_path'] = folder_selected
-                    scan_folder_files(folder_selected)
+                    if scan:
+                        st.session_state['selected_folder_path'] = folder_selected
+                        scan_folder_files(folder_selected)
                     return folder_selected
             return None
         except Exception as e:
@@ -1350,6 +1665,117 @@ def open_file_dialog():
             return None
     return None
 
+def _url_row_key(row_id):
+    """URL 입력 행의 위젯 key. 행 id 기준이라 행을 지워도 다른 행 값이 밀리지 않는다."""
+    return f"yt_url_row_{row_id}"
+
+
+def _add_url_row():
+    """URL 입력 행 추가 (on_click 콜백 — 본문 재실행 전에 상태가 확정된다)."""
+    st.session_state['yt_url_rows'].append(st.session_state['yt_url_row_seq'])
+    st.session_state['yt_url_row_seq'] += 1
+
+
+def _remove_url_row(row_id):
+    """URL 입력 행 제거. 마지막 한 행은 남긴다."""
+    rows = st.session_state['yt_url_rows']
+    if len(rows) > 1 and row_id in rows:
+        rows.remove(row_id)
+        # 콜백은 위젯 생성 전에 실행되므로 여기서 key를 지우는 것은 안전하다.
+        st.session_state.pop(_url_row_key(row_id), None)
+
+
+def _reset_url_rows():
+    """입력 행을 빈 한 행으로 되돌린다.
+
+    기존 key를 지우지 않고 '새 id'를 발급한다. 이미 생성된 위젯의 session_state를
+    수정하면 Streamlit이 예외를 던지기 때문이다(이 함수는 본문에서 호출된다).
+    """
+    st.session_state['yt_url_rows'] = [st.session_state['yt_url_row_seq']]
+    st.session_state['yt_url_row_seq'] += 1
+
+
+def _collect_url_rows():
+    """입력 행에서 URL 목록을 모은다(입력 순서 유지, 중복 제거).
+
+    한 행에 공백/줄바꿈/콤마로 여러 링크를 붙여넣어도 분리한다.
+    """
+    urls, seen = [], set()
+    for row_id in st.session_state['yt_url_rows']:
+        raw = (st.session_state.get(_url_row_key(row_id)) or '').strip()
+        if not raw:
+            continue
+        for token in re.split(r'[\s,]+', raw):
+            token = token.strip()
+            if token and token not in seen:
+                seen.add(token)
+                urls.append(token)
+    return urls
+
+
+def add_urls_to_queue(urls, settings):
+    """여러 URL의 제목을 병렬 조회해 큐에 추가한다.
+
+    제목 조회는 URL당 한 번의 네트워크 왕복이므로 순차로 하면 개수에 비례해 느려진다.
+    스레드로 동시에 조회한다(_fetch_video_title은 캐시에 락이 있어 스레드 안전).
+    반환: (added, skipped, failed) — 각각 URL 리스트.
+    """
+    existing = {item['url'] for item in st.session_state['yt_queue']}
+    todo = [u for u in urls if u not in existing]
+    skipped = [u for u in urls if u in existing]
+    if not todo:
+        return [], skipped, []
+
+    yt_dlp_path = st.session_state['yt_downloader']._get_yt_dlp_path()
+    fetched = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+        futures = {pool.submit(_fetch_video_title, yt_dlp_path, u): u for u in todo}
+        for future in concurrent.futures.as_completed(futures):
+            url = futures[future]
+            try:
+                fetched[url] = future.result()
+            except Exception as e:
+                print(f"제목 조회 실패 {url}: {e}")
+                fetched[url] = None
+
+    added, failed = [], []
+    for url in todo:  # 입력 순서대로 큐에 넣는다
+        info = fetched.get(url)
+        if not info:
+            failed.append(url)
+            continue
+        st.session_state['yt_queue'].append({
+            'url': url, 'info': info, 'settings': dict(settings),
+        })
+        st.session_state['yt_queue_selection'][url] = True
+        st.session_state[_yt_check_key(url)] = True
+        added.append(url)
+    return added, skipped, failed
+
+
+def _toggle_all_queue(new_state):
+    """유튜브 큐 일괄 선택/해제. 체크박스 위젯 state를 직접 갱신한다."""
+    for item in st.session_state['yt_queue']:
+        st.session_state['yt_queue_selection'][item['url']] = new_state
+        st.session_state[_yt_check_key(item['url'])] = new_state
+
+
+def _apply_sort(column):
+    """정렬 열 토글. on_click 콜백이므로 본문 재실행 전에 상태가 확정된다."""
+    if st.session_state['sort_by'] == column:
+        st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
+    else:
+        st.session_state['sort_by'] = column
+        st.session_state['sort_order'] = 'asc' if column == 'name' else 'desc'
+
+
+def _toggle_all_files(new_state):
+    """파일 목록 일괄 선택/해제. 체크박스 위젯 state를 직접 갱신한다."""
+    for vf in st.session_state['video_files_list']:
+        st.session_state['file_selection_state'][vf] = new_state
+        st.session_state[_file_check_key(vf)] = new_state
+
+
 def scan_folder_files(folder_path):
     """선택된 폴더에서 비디오 파일 스캔 + 메타데이터 캐싱"""
     video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
@@ -1379,6 +1805,42 @@ def scan_folder_files(folder_path):
         
     except Exception as e:
         st.error(f"Folder scan error: {e}")
+
+def finish_operation(status, summary, log_lines=None):
+    """장시간 작업 종료 처리: 결과를 세션에 저장하고 즉시 rerun한다.
+
+    작업 중에는 섹션 네비게이션을 잠그는데(중간 전환 시 스크립트 런이 끊겨
+    ffmpeg 프로세스가 고아가 되고 변환이 중복 실행된다), 작업이 끝난 뒤
+    rerun하지 않으면 잠긴 UI가 화면에 그대로 남아버린다. 여기서 rerun해
+    idle 상태로 되돌리고, 결과는 다음 런에서 렌더한다.
+    """
+    st.session_state['op_result'] = {
+        'status': status,
+        'summary': summary,
+        'log': log_lines or [],
+    }
+    st.rerun()
+
+
+def render_op_result():
+    """직전 작업 결과를 렌더하고 소비한다(한 번만 표시)."""
+    result = st.session_state.get('op_result')
+    if not result:
+        return
+    st.session_state['op_result'] = None
+
+    if result['status'] == 'success':
+        st.success(result['summary'])
+    elif result['status'] == 'warning':
+        st.warning(result['summary'])
+    else:
+        st.error(result['summary'])
+
+    if result['log']:
+        with st.expander(f"자세히 ({len(result['log'])}건)", expanded=False):
+            for line in result['log']:
+                st.markdown(f"- {line}")
+
 
 def resolve_writable_save_path(configured_path):
     """저장 경로가 유효/쓰기 가능한지 확인하고 안전한 경로를 반환"""
@@ -1421,7 +1883,8 @@ def convert_videos_realtime(selected_files, target_codec, target_resolution, qua
     
     successful_conversions = 0
     failed_conversions = 0
-    
+    result_log = []
+
     for file_idx, input_file in enumerate(selected_files):
         if not st.session_state.get('conversion_running', False):
             break
@@ -1492,28 +1955,28 @@ def convert_videos_realtime(selected_files, target_codec, target_resolution, qua
         if success:
             successful_conversions += 1
             elapsed_time = int(end_time - start_time)
+            line = f"✅ `{output_filename}` ({elapsed_time}s)"
             st.success(f"✅ Conversion complete: `{output_filename}` (Duration: {elapsed_time}s)")
         else:
             failed_conversions += 1
+            line = f"❌ `{file_name}` — {message}"
             st.error(f"❌ Conversion failed: `{file_name}` - {message}")
-        
+        result_log.append(line)
+
         # 전체 진행률 업데이트
         overall_progress.progress((file_idx + 1) / total_files)
-        
-        # 잠깐 대기
-        time.sleep(0.1)
-    
+
     # 변환 완료
     st.session_state['conversion_running'] = False
-    current_file_info.empty()
-    current_file_progress.empty()
-    conversion_log.empty()
-    
+
     if successful_conversions > 0:
-        st.success(f"🎉 Conversion complete! Success: {successful_conversions}, Failed: {failed_conversions}")
-        st.balloons()
+        finish_operation(
+            'success' if failed_conversions == 0 else 'warning',
+            f"🎉 변환 완료 — 성공 {successful_conversions}건, 실패 {failed_conversions}건 · 저장 위치: {output_path}",
+            result_log,
+        )
     else:
-        st.error("❌ All conversions failed.")
+        finish_operation('error', "❌ 모든 변환이 실패했습니다.", result_log)
 
 def batch_download_and_convert(selected_items):
     """유튜브 배치 다운로드 + 변환 함수"""
@@ -1541,6 +2004,7 @@ def batch_download_and_convert(selected_items):
 
     successful_count = 0
     failed_count = 0
+    result_log = []
 
     for video_idx, item in enumerate(selected_items):
         if not st.session_state.get('yt_download_running', False):
@@ -1567,24 +2031,21 @@ def batch_download_and_convert(selected_items):
 
         if not success:
             st.error(f"❌ Download failed: {info['title']} - {message}")
+            result_log.append(f"❌ 다운로드 실패 — {info['title']}: {message}")
             failed_count += 1
             overall_progress.progress((video_idx + 1) / total_videos)
             continue
 
         st.success(f"✅ Downloaded: {os.path.basename(downloaded_file)}")
 
-        # 다운로드 성공 시 큐의 해당 아이템 정보 업데이트
-        for queue_item in st.session_state['yt_queue']:
-            if queue_item['url'] == url:
-                # 전체 정보 가져오기
-                full_info = st.session_state['yt_downloader'].get_video_info(url)
-                if full_info:
-                    queue_item['info'] = full_info
-                break
+        # 다운로드가 끝난 뒤 yt-dlp --dump-json으로 유튜브에 재조회하던 코드를 제거했다.
+        # 이미 로컬 파일이 있으므로 네트워크 왕복(항목당 5~20초)은 순수 낭비다.
+        # 표시에 필요한 duration은 아래 ffprobe 결과에서 얻는다.
 
         # Download Only 모드면 변환 건너뛰기
         if settings.get('download_only', False):
             st.info("📥 Download Only mode - Skipping conversion")
+            result_log.append(f"📥 다운로드만 — {os.path.basename(downloaded_file)}")
             successful_count += 1
             overall_progress.progress((video_idx + 1) / total_videos)
             download_progress.progress(0)
@@ -1642,18 +2103,22 @@ def batch_download_and_convert(selected_items):
 
             if conversion_success:
                 st.success(f"✅ Converted: {output_filename}")
+                result_log.append(f"✅ 변환 — {output_filename}")
                 successful_count += 1
 
-                # 원본 파일 삭제
-                try:
-                    os.remove(downloaded_file)
-                except Exception as e:
-                    print(f"원본 파일 삭제 실패: {e}")
+                # 원본 파일 삭제 (설정에 따름 — 단일 다운로드 경로와 동일하게 동작)
+                if st.session_state.get('yt_delete_original', True):
+                    try:
+                        os.remove(downloaded_file)
+                    except Exception as e:
+                        print(f"원본 파일 삭제 실패: {e}")
             else:
                 st.error(f"❌ Conversion failed: {info['title']} - {conversion_message}")
+                result_log.append(f"❌ 변환 실패 — {info['title']}: {conversion_message}")
                 failed_count += 1
         else:
-            st.info(f"ℹ️ Already desired format. Skipping conversion.")
+            st.info("ℹ️ Already desired format. Skipping conversion.")
+            result_log.append(f"ℹ️ 이미 원하는 포맷 — {os.path.basename(downloaded_file)}")
             successful_count += 1
 
         # 전체 진행률 업데이트
@@ -1663,147 +2128,21 @@ def batch_download_and_convert(selected_items):
 
     # 완료
     st.session_state['yt_download_running'] = False
-    current_video_info.empty()
-    download_progress.empty()
-    conversion_progress.empty()
-    status_text.empty()
-    overall_progress.empty()
 
-    # 배치 완료 후 큐 비우기
+    # 배치 완료 후 큐 비우기 (체크박스 위젯 state도 함께 정리)
+    for item in st.session_state['yt_queue']:
+        st.session_state.pop(_yt_check_key(item['url']), None)
     st.session_state['yt_queue'] = []
     st.session_state['yt_queue_selection'] = {}
 
     if successful_count > 0:
-        st.success(f"🎉 Batch operation completed! Success: {successful_count}, Failed: {failed_count}")
-        st.balloons()
-    else:
-        st.error("❌ All operations failed.")
-
-def download_and_convert_youtube(url, target_codec, target_resolution, quality_preset, target_fps="original", target_scan="progressive", custom_video_br=None, custom_audio_br=None, download_only=False):
-    """유튜브 다운로드 + 변환 함수"""
-
-    if download_only:
-        st.markdown("### 📥 YouTube Download Progress")
-    else:
-        st.markdown("### 📥 YouTube Download + Conversion Progress")
-    
-    # 저장 경로 설정
-    configured_path = st.session_state.get('yt_save_folder_path')
-    save_path, save_path_warning = resolve_writable_save_path(configured_path)
-    st.session_state['yt_save_folder_path'] = save_path
-    
-    st.info(f"📂 Save location: {save_path}")
-    if save_path_warning:
-        st.warning(save_path_warning)
-    
-    # 진행률 표시
-    download_progress = st.progress(0)
-    status_text = st.empty()
-    conversion_progress = st.progress(0)
-    
-    # 1단계: 다운로드
-    status_text.markdown("**📥 1단계: 유튜브에서 다운로드 중...**")
-    
-    def download_progress_callback(progress):
-        download_progress.progress(progress * 0.5)  # 전체의 50%까지
-    
-    success, message, downloaded_file = st.session_state['yt_downloader'].download_video(
-        url, save_path, download_progress_callback
-    )
-    
-    if not success:
-        st.session_state['yt_download_running'] = False
-        download_progress.empty()
-        conversion_progress.empty()
-        status_text.empty()
-        st.error(f"❌ Download failed: {message}")
-        return
-    
-    download_progress.progress(0.5)
-    st.success(f"✅ Download complete: {os.path.basename(downloaded_file)}")
-
-    # Download Only 모드면 변환 건너뛰기
-    if download_only:
-        download_progress.progress(1.0)
-        st.session_state['yt_download_running'] = False
-        download_progress.empty()
-        conversion_progress.empty()
-        status_text.empty()
-
-        st.success(f"🎉 Download completed! File saved to: `{downloaded_file}`")
-        st.balloons()
-        return
-
-    # 2단계: 변환 (필요한 경우만)
-    if downloaded_file:
-        # 현재 코덱 확인
-        video_info = st.session_state['converter'].get_video_info(downloaded_file)
-        current_codec = video_info['codec'] if video_info else 'unknown'
-        
-        # 변환이 필요한지 확인
-        needs_conversion = (
-            current_codec != target_codec or 
-            target_resolution != "original"
+        finish_operation(
+            'success' if failed_count == 0 else 'warning',
+            f"🎉 배치 완료 — 성공 {successful_count}건, 실패 {failed_count}건 · 저장 위치: {save_path}",
+            result_log,
         )
-        
-        if needs_conversion:
-            status_text.markdown("**🎬 2단계: 비디오 변환 중...**")
-            
-            # 출력 파일명 생성
-            base_name = os.path.splitext(os.path.basename(downloaded_file))[0]
-            if target_resolution != "original":
-                output_filename = f"{base_name}_{target_codec}_{target_resolution}.mp4"
-            else:
-                output_filename = f"{base_name}_{target_codec}.mp4"
-            
-            output_file = os.path.join(save_path, output_filename)
-            
-            # 변환 진행률 콜백
-            def conversion_progress_callback(progress, current_time, total_time):
-                overall_progress = 0.5 + (progress * 0.5)  # 50%부터 100%까지
-                download_progress.progress(overall_progress)
-                conversion_progress.progress(progress)
-                
-                min_current = int(current_time // 60)
-                sec_current = int(current_time % 60)
-                min_total = int(total_time // 60)
-                sec_total = int(total_time % 60)
-                
-                status_text.markdown(f"**🎬 변환 진행률: {progress*100:.1f}% | {min_current:02d}:{sec_current:02d} / {min_total:02d}:{sec_total:02d}**")
-            
-            # 변환 실행
-            conversion_success, conversion_message = st.session_state['converter'].convert_video(
-                downloaded_file, output_file, target_codec, target_resolution, quality_preset, target_fps, target_scan, custom_video_br, custom_audio_br, conversion_progress_callback
-            )
-            
-            if conversion_success:
-                st.success(f"✅ Conversion complete: {output_filename}")
-                
-                # 원본 파일 삭제 여부 확인
-                if st.checkbox("Delete original downloaded file", value=True):
-                    try:
-                        os.remove(downloaded_file)
-                        st.info("🗑️ Original file has been deleted.")
-                    except Exception as e:
-                        st.warning(f"⚠️ Failed to delete original file: {e}")
-                
-                final_file = output_file
-            else:
-                st.error(f"❌ Conversion failed: {conversion_message}")
-                final_file = downloaded_file
-        else:
-            download_progress.progress(1.0)
-            st.info("ℹ️ Already the desired codec and resolution. Skipping conversion.")
-            final_file = downloaded_file
-        
-        # 완료
-        st.session_state['yt_download_running'] = False
-        download_progress.empty()
-        conversion_progress.empty()
-        status_text.empty()
-
-        st.success(f"🎉 All tasks completed! File saved to: `{final_file}`")
-        st.balloons()
+    else:
+        finish_operation('error', "❌ 모든 작업이 실패했습니다.", result_log)
 
 # 테마 적용 스크립트 — 1회 적용, MutationObserver/setTimeout 제거
 theme_html = f"""
@@ -1823,19 +2162,24 @@ theme_html = f"""
 """
 components.html(theme_html, height=0)
 
+# 작업 진행 여부. 진행 중에는 rerun을 유발하는 컨트롤(섹션 전환, 테마 토글)을 잠근다.
+# 작업 중 rerun이 걸리면 실행 중인 스크립트 런이 끊겨 ffmpeg 프로세스가 고아가 되고
+# 변환이 중복 실행된다. 예전 코드는 "탭을 전환하지 마세요"라는 경고문으로 때웠다.
+APP_BUSY = (
+    st.session_state.get('conversion_running', False)
+    or st.session_state.get('yt_download_running', False)
+    or st.session_state.get('mute_running', False)
+)
+
 # 테마 토글 버튼 (스타일은 통합 CSS에 정의됨)
 theme_icon = "☀" if st.session_state['theme_mode'] == 'dark' else "☾"
-if st.button(theme_icon, key="theme_toggle", help="Toggle Light/Dark Mode"):
+if st.button(theme_icon, key="theme_toggle", help="Toggle Light/Dark Mode", disabled=APP_BUSY):
     new_mode = 'dark' if st.session_state['theme_mode'] == 'light' else 'light'
     st.session_state['theme_mode'] = new_mode
     st.toast(f"{'Dark' if new_mode == 'dark' else 'Light'} mode", icon="☀️" if new_mode == 'light' else "🌙")
     st.rerun()
 
-# 진행 중 경고 표시
-if st.session_state.get('conversion_running', False) or st.session_state.get('yt_download_running', False):
-    st.warning("⚠️ **Conversion/Download in progress.** Please do not switch tabs or refresh the page until it's complete.")
-
-# Lumina TopNavBar (decorative — Streamlit tabs handle real navigation)
+# Lumina TopNavBar (decorative — segmented control below handles real navigation)
 st.html(f'''
 <div class="vt-topnav">
     <div class="vt-topnav__brand">
@@ -1861,55 +2205,81 @@ st.html('''
 </div>
 ''')
 
-# 탭 생성
-tab1, tab2, tab3 = st.tabs(["🎬 Video Conversion", "📥 YouTube Download", "🔇 Mute Video"])
+# --- 옵션 딕셔너리 (모듈 스코프) ---
+# 주의: 활성 섹션만 렌더하므로 이 딕셔너리들이 특정 탭 블록 안에 있으면
+#       다른 탭에서 NameError가 난다. 반드시 탭 밖에 유지할 것.
+codec_options = {
+    "h264": "H.264 - Universal",
+    "h265": "H.265 - High Compression",
+    "vp9": "VP9 - Web Optimized",
+    "av1": "AV1 - Next-Gen Efficiency"
+}
+resolution_options = {
+    "original": "Keep Original",
+    "4k": "4K (3840x2160)",
+    "1440p": "QHD (2560x1440)",
+    "1080p": "Full HD (1920x1080)",
+    "720p": "HD (1280x720)",
+    "480p": "SD (854x480)"
+}
+quality_presets = {
+    "fast": "Fast Conversion (Normal Quality)",
+    "balanced": "Balanced (Recommended)",
+    "high": "High Quality (Slow Conversion)",
+    "crf": "CRF Mode (Constant Quality)",
+    "custom": "Custom Bitrate"
+}
+fps_options = {
+    "original": "Keep Original",
+    "23.976": "23.976 fps (Film)",
+    "24": "24 fps (Cinema)",
+    "25": "25 fps (PAL)",
+    "29.97": "29.97 fps (NTSC)",
+    "30": "30 fps",
+    "50": "50 fps",
+    "59.94": "59.94 fps",
+    "60": "60 fps"
+}
+scan_options = {
+    "progressive": "Progressive",
+    "interlaced": "Interlaced"
+}
+
+# --- 섹션 네비게이션 ---
+# st.tabs를 쓰지 않는 이유: st.tabs의 선택 상태는 프론트엔드 전용이라
+# st.rerun()이 발생하면 항상 첫 탭으로 되돌아간다(탭이 튀는 원인).
+# 위젯 key를 가진 segmented_control은 값이 session_state에 남아 rerun에도 유지된다.
+if 'nav_section' not in st.session_state:
+    st.session_state['nav_section'] = st.session_state.get('active_tab', TAB_CONVERT)
+
+# st.radio를 쓰는 이유(segmented_control 대신): 항상 하나가 선택되어 해제 상태가 없고,
+# streamlit.testing(AppTest)이 지원하므로 '탭이 튀는' 회귀를 자동 테스트할 수 있다.
+# 외형은 CSS(.st-key-nav_section)로 세그먼트 pill과 동일하게 만든다.
+active_tab = st.radio(
+    "Section",
+    TAB_LABELS,
+    key="nav_section",
+    horizontal=True,
+    label_visibility="collapsed",
+    disabled=APP_BUSY,
+)
+st.session_state['active_tab'] = active_tab
+
+if APP_BUSY:
+    st.caption("⏳ 작업이 진행 중입니다. 완료될 때까지 섹션 전환이 잠깁니다.")
+
+# 직전 장시간 작업의 결과를 표시한다(작업 종료 시 rerun하므로 여기서 렌더된다).
+render_op_result()
 
 
 # Tab 1: Local File Conversion
-with tab1:
+if active_tab == TAB_CONVERT:
     st.html("""
     <div class="vt-tab-hero">
         <p class="vt-tab-hero__title">Local Conversion Workspace</p>
         <p class="vt-tab-hero__sub">폴더/파일 선택 → 정렬/선택 → 일괄 변환 흐름으로 작동합니다.</p>
     </div>
     """)
-    # Option dictionaries (defined at tab scope for Tab 2 reuse)
-    codec_options = {
-        "h264": "H.264 - Universal",
-        "h265": "H.265 - High Compression",
-        "vp9": "VP9 - Web Optimized",
-        "av1": "AV1 - Next-Gen Efficiency"
-    }
-    resolution_options = {
-        "original": "Keep Original",
-        "4k": "4K (3840x2160)",
-        "1440p": "QHD (2560x1440)",
-        "1080p": "Full HD (1920x1080)",
-        "720p": "HD (1280x720)",
-        "480p": "SD (854x480)"
-    }
-    quality_presets = {
-        "fast": "Fast Conversion (Normal Quality)",
-        "balanced": "Balanced (Recommended)",
-        "high": "High Quality (Slow Conversion)",
-        "crf": "CRF Mode (Constant Quality)",
-        "custom": "Custom Bitrate"
-    }
-    fps_options = {
-        "original": "Keep Original",
-        "23.976": "23.976 fps (Film)",
-        "24": "24 fps (Cinema)",
-        "25": "25 fps (PAL)",
-        "29.97": "29.97 fps (NTSC)",
-        "30": "30 fps",
-        "50": "50 fps",
-        "59.94": "59.94 fps",
-        "60": "60 fps"
-    }
-    scan_options = {
-        "progressive": "Progressive",
-        "interlaced": "Interlaced"
-    }
 
     # --- Stats cards ---
     _files = st.session_state['video_files_list']
@@ -1988,11 +2358,8 @@ with tab1:
                         "Audio Bitrate (kbps):", min_value=64, max_value=320, value=192, step=32
                     )
 
-        # Default values if expander not opened
-        if 'selected_fps' not in dir():
-            selected_fps = "original"
-        if 'selected_scan' not in dir():
-            selected_scan = "progressive"
+        # st.expander의 본문은 접혀 있어도 항상 실행되므로 selected_fps/selected_scan은
+        # 언제나 정의된다. 기존의 `if 'x' not in dir():` 폴백은 동작하지 않는 죽은 코드여서 제거했다.
 
         st.markdown('<p class="vt-section-label">FILE SOURCE</p>', unsafe_allow_html=True)
         with st.container(key="file_source"):
@@ -2077,60 +2444,52 @@ with tab1:
                     size_arrow = (" ↑" if st.session_state['sort_order'] == 'asc' else " ↓") if st.session_state['sort_by'] == 'size' else " ↕"
                     date_arrow = (" ↑" if st.session_state['sort_order'] == 'asc' else " ↓") if st.session_state['sort_by'] == 'date' else " ↕"
 
-                    col_check_h, col_name_h, col_size_h, col_date_h = st.columns([0.5, 3, 1, 1.5])
+                    # 정렬/일괄선택은 on_click 콜백으로 처리한다.
+                    # 콜백은 재실행 '전에' 실행되므로 st.rerun()을 부를 필요가 없고
+                    # (예전 코드의 st.rerun()은 fragment 밖 전체 rerun을 유발했다),
+                    # 같은 실행에서 정렬 결과와 화살표 표시가 일치한다.
+                    col_check_h, col_meta_h = st.columns([0.5, 5.5])
                     with col_check_h:
                         all_selected = all(st.session_state['file_selection_state'].get(f, True) for f in st.session_state['video_files_list'])
-                        toggle_label = "☑ All" if all_selected else "☐ All"
-                        if st.button(toggle_label, key="toggle_all_header", use_container_width=True):
-                            new_state = not all_selected
-                            for vf in st.session_state['video_files_list']:
-                                st.session_state['file_selection_state'][vf] = new_state
-                            st.session_state['vc_toggle_counter'] += 1
-                            st.rerun()
-                    with col_name_h:
-                        if st.button(f"File Name{name_arrow}", key="sort_name", use_container_width=True):
-                            if st.session_state['sort_by'] == 'name':
-                                st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
-                            else:
-                                st.session_state['sort_by'] = 'name'
-                                st.session_state['sort_order'] = 'asc'
-                            st.rerun()
-                    with col_size_h:
-                        if st.button(f"Size{size_arrow}", key="sort_size", use_container_width=True):
-                            if st.session_state['sort_by'] == 'size':
-                                st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
-                            else:
-                                st.session_state['sort_by'] = 'size'
-                                st.session_state['sort_order'] = 'desc'
-                            st.rerun()
-                    with col_date_h:
-                        if st.button(f"Modified{date_arrow}", key="sort_date", use_container_width=True):
-                            if st.session_state['sort_by'] == 'date':
-                                st.session_state['sort_order'] = 'desc' if st.session_state['sort_order'] == 'asc' else 'asc'
-                            else:
-                                st.session_state['sort_by'] = 'date'
-                                st.session_state['sort_order'] = 'desc'
-                            st.rerun()
+                        st.button(
+                            "☑ All" if all_selected else "☐ All",
+                            key="toggle_all_header", use_container_width=True,
+                            on_click=_toggle_all_files, args=(not all_selected,),
+                        )
+                    with col_meta_h:
+                        h_name, h_size, h_date = st.columns([3, 1, 1.5])
+                        with h_name:
+                            st.button(f"File Name{name_arrow}", key="sort_name", use_container_width=True,
+                                      on_click=_apply_sort, args=("name",))
+                        with h_size:
+                            st.button(f"Size{size_arrow}", key="sort_size", use_container_width=True,
+                                      on_click=_apply_sort, args=("size",))
+                        with h_date:
+                            st.button(f"Modified{date_arrow}", key="sort_date", use_container_width=True,
+                                      on_click=_apply_sort, args=("date",))
 
-                    for i, file_info in enumerate(file_info_list):
+                    # 파일당 위젯 수를 줄인다(기존 columns4+checkbox+markdown3 → columns2+checkbox+html1).
+                    # 파일 수가 많을 때 렌더/전송 비용이 지배적이므로 이 축소가 체감 반응성에 직결된다.
+                    for file_info in file_info_list:
                         video_file = file_info['path']
-                        file_name = file_info['name']
                         file_size_mb = file_info['size'] / (1024 * 1024)
                         file_date = datetime.fromtimestamp(file_info['date']).strftime('%Y-%m-%d %H:%M')
 
-                        col_check, col_name, col_size, col_date = st.columns([0.5, 3, 1, 1.5])
+                        col_check, col_meta = st.columns([0.5, 5.5])
                         with col_check:
-                            current_state = st.session_state['file_selection_state'].get(video_file, True)
-                            toggle_counter = st.session_state.get('vc_toggle_counter', 0)
-                            file_key = f"file_check_{hash(video_file)}_{toggle_counter}"
-                            is_selected = st.checkbox("✓", value=current_state, key=file_key, label_visibility="collapsed")
+                            file_key = _file_check_key(video_file)
+                            if file_key not in st.session_state:
+                                st.session_state[file_key] = st.session_state['file_selection_state'].get(video_file, True)
+                            is_selected = st.checkbox("✓", key=file_key, label_visibility="collapsed")
                             st.session_state['file_selection_state'][video_file] = is_selected
-                        with col_name:
-                            st.markdown(f'<p>📄 {file_name}</p>', unsafe_allow_html=True)
-                        with col_size:
-                            st.markdown(f'<p style="text-align:center;"><strong>{file_size_mb:.1f} MB</strong></p>', unsafe_allow_html=True)
-                        with col_date:
-                            st.markdown(f'<p style="text-align:center;">{file_date}</p>', unsafe_allow_html=True)
+                        with col_meta:
+                            st.html(
+                                f'<div class="vt-file-row">'
+                                f'<span class="vt-file-row__name" title="{_esc(video_file)}">📄 {_esc(file_info["name"])}</span>'
+                                f'<span class="vt-file-row__size">{file_size_mb:.1f} MB</span>'
+                                f'<span class="vt-file-row__date">{file_date}</span>'
+                                f'</div>'
+                            )
                 else:
                     st.info("📂 Select a folder or files to begin")
 
@@ -2177,7 +2536,7 @@ with tab1:
 
 
 # 탭 2: 유튜브 다운로더
-with tab2:
+if active_tab == TAB_YOUTUBE:
     st.html("""
     <div class="vt-tab-hero">
         <p class="vt-tab-hero__title">YouTube Queue Console</p>
@@ -2201,9 +2560,7 @@ with tab2:
     ''')
 
     # Pre-init variables
-    download_now_btn = False
     add_to_queue_btn = False
-    youtube_url = ""
     yt_custom_video_br = None
     yt_custom_audio_br = None
     start_batch = False
@@ -2274,6 +2631,13 @@ with tab2:
                         yt_custom_audio_br = st.number_input(
                             "Audio Bitrate (kbps):", min_value=64, max_value=320, value=192, step=32, key="yt_custom_abr"
                         )
+
+                # 원본 삭제 여부는 반드시 변환 '전에' 물어본다.
+                st.checkbox(
+                    "변환 후 원본 다운로드 파일 삭제",
+                    key="yt_delete_original",
+                    help="끄면 다운로드된 원본과 변환 결과를 모두 보관합니다",
+                )
             else:
                 yt_selected_codec = "h264"
                 yt_selected_resolution = "original"
@@ -2281,83 +2645,96 @@ with tab2:
                 yt_selected_fps = "original"
                 yt_selected_scan = "progressive"
 
-        # Default values if expander not opened
-        if 'yt_selected_fps' not in dir():
-            yt_selected_fps = "original"
-        if 'yt_selected_scan' not in dir():
-            yt_selected_scan = "progressive"
+        # (동작하지 않던 `if 'x' not in dir():` 폴백 제거 — 위 if/else 양쪽에서 항상 대입된다)
 
         st.markdown('<p class="vt-section-label">SAVE LOCATION</p>', unsafe_allow_html=True)
         with st.container(key="yt_save_panel"):
             st.text_input("Location:", value=st.session_state['yt_save_folder_path'], disabled=True, label_visibility="collapsed", key="yt_save_path_display")
             if st.button("Select Folder", key="yt_folder_select", use_container_width=True):
-                selected = open_folder_dialog()
+                # scan=False: 저장 위치 선택이므로 로컬 변환 탭의 소스 폴더를 덮어쓰지 않는다.
+                selected = open_folder_dialog(scan=False)
                 if selected:
                     st.session_state['yt_save_folder_path'] = selected
                     st.rerun()
 
-        # Start/Stop batch buttons
-        if st.session_state['yt_queue']:
-            _sel_count = sum(1 for item in st.session_state['yt_queue']
-                           if st.session_state['yt_queue_selection'].get(item['url'], True))
-            if _sel_count > 0:
-                col_start, col_stop = st.columns([3, 1])
-                with col_start:
-                    start_batch = st.button(
-                        f"▶ Batch Download ({_sel_count})",
-                        type="primary", use_container_width=True,
-                        disabled=st.session_state.get('yt_download_running', False)
-                    )
-                with col_stop:
-                    stop_batch = st.button(
-                        "■ Stop", use_container_width=True,
-                        disabled=not st.session_state.get('yt_download_running', False),
-                        key="yt_stop_batch"
-                    )
+        # (배치 다운로드 버튼은 큐 아래로 이동 — 링크 입력 → 큐 → 다운로드 흐름을 따른다)
 
     with yt_right_col:
         st.markdown('<p class="vt-section-label">DOWNLOAD QUEUE</p>', unsafe_allow_html=True)
 
         with st.container(key="yt_queue_panel"):
-            # URL input
-            youtube_url = st.text_input(
-                "YouTube URL:",
-                value=st.session_state.get('yt_url_input', ''),
-                placeholder="https://www.youtube.com/watch?v=...",
-                key="yt_url_input_field",
-                label_visibility="collapsed"
-            )
-            if youtube_url != st.session_state.get('yt_url_input', ''):
-                st.session_state['yt_url_input'] = youtube_url
+            # 직전 '큐 추가' 결과 알림 (한 번만 표시하고 소비)
+            _notice = st.session_state.pop('yt_notice', None)
+            if _notice:
+                (st.warning if _notice['type'] == 'warning' else st.success)(_notice['msg'])
 
-            col_dl, col_q = st.columns(2)
-            with col_dl:
-                download_now_btn = st.button(
-                    "Download Now", type="primary", use_container_width=True,
-                    disabled=not youtube_url or st.session_state.get('yt_download_running', False),
-                    key="yt_download_now"
+            # --- URL 입력: 여러 링크를 행으로 모은 뒤 한 번에 큐로 보낸다 ---
+            _busy = st.session_state.get('yt_download_running', False)
+            _rows = st.session_state['yt_url_rows']
+
+            with st.container(key="yt_url_rows"):
+                for _row_id in _rows:
+                    _c_in, _c_rm = st.columns([12, 1])
+                    with _c_in:
+                        # label은 행 id로 고정한다. Streamlit 위젯 ID는 key뿐 아니라
+                        # label도 반영하므로, 위치 번호(URL 1/2/3)를 쓰면 행을 삭제해
+                        # 번호가 밀릴 때 위젯이 새로 만들어져 입력값이 사라진다.
+                        st.text_input(
+                            f"YouTube URL (row {_row_id})",
+                            placeholder="https://www.youtube.com/watch?v=...",
+                            key=_url_row_key(_row_id),
+                            label_visibility="collapsed",
+                            disabled=_busy,
+                        )
+                    with _c_rm:
+                        st.button(
+                            "✕", key=f"yt_url_rm_{_row_id}", help="이 링크 칸 삭제",
+                            type="tertiary", disabled=_busy or len(_rows) == 1,
+                            on_click=_remove_url_row, args=(_row_id,),
+                        )
+
+            _pending_n = len(_collect_url_rows())
+
+            # '링크 칸 추가'와 'Add to Queue'를 한 줄에 둔다(왼쪽 보조 / 오른쪽 주 동작).
+            # 이 줄은 yt_url_rows 컨테이너 밖에 있어야 한다 — 안에 있으면 ✕ 버튼용
+            # CSS(.st-key-yt_url_rows div[column] button)에 같이 걸린다.
+            _c_add, _c_queue = st.columns([1.4, 1])
+            with _c_add:
+                st.button(
+                    "＋ 링크 칸 추가", key="yt_url_add_row", type="tertiary",
+                    help="여러 영상을 한 번에 넣으려면 칸을 추가하세요 (한 칸에 여러 링크를 붙여넣어도 됩니다)",
+                    disabled=_busy, on_click=_add_url_row,
                 )
-            with col_q:
+            with _c_queue:
                 add_to_queue_btn = st.button(
-                    "Add to Queue", use_container_width=True,
-                    disabled=not youtube_url or st.session_state.get('yt_download_running', False),
-                    key="yt_add_to_queue"
+                    f"＋ Add to Queue ({_pending_n})" if _pending_n else "＋ Add to Queue",
+                    type="primary", use_container_width=True,
+                    disabled=_pending_n == 0 or _busy,
+                    key="yt_add_to_queue",
                 )
 
             # Queue items
             if st.session_state['yt_queue']:
-                col_sel, col_clr = st.columns(2)
-                with col_sel:
-                    all_selected = all(st.session_state['yt_queue_selection'].get(item['url'], True) for item in st.session_state['yt_queue'])
-                    sel_label = "☐ Deselect All" if all_selected else "☑ Select All"
-                    if st.button(sel_label, use_container_width=True, key="yt_select_all"):
-                        new_state = not all_selected
-                        for item in st.session_state['yt_queue']:
-                            st.session_state['yt_queue_selection'][item['url']] = new_state
-                        st.session_state['yt_toggle_counter'] += 1
-                        st.rerun()
-                with col_clr:
-                    if st.button("Clear Queue", use_container_width=True, key="yt_clear_queue"):
+                all_selected = all(st.session_state['yt_queue_selection'].get(item['url'], True)
+                                   for item in st.session_state['yt_queue'])
+                # 너비도 위계다 — use_container_width를 주면 주 동작과 같은 폭이 되어
+                # 크기를 줄인 효과가 사라진다. 내용 크기로만 잡는다.
+                _q_title, _q_sel, _q_clr = st.columns([5, 1.15, 1])
+                with _q_title:
+                    st.markdown(
+                        f'<p class="vt-queue-toolbar__title">QUEUE · {len(st.session_state["yt_queue"])}</p>',
+                        unsafe_allow_html=True,
+                    )
+                with _q_sel:
+                    st.button(
+                        "전체 해제" if all_selected else "전체 선택",
+                        key="yt_select_all", type="tertiary",
+                        on_click=_toggle_all_queue, args=(not all_selected,),
+                    )
+                with _q_clr:
+                    if st.button("큐 비우기", key="yt_clear_queue", type="tertiary"):
+                        for _item in st.session_state['yt_queue']:
+                            st.session_state.pop(_yt_check_key(_item['url']), None)
                         st.session_state['yt_queue'] = []
                         st.session_state['yt_queue_selection'] = {}
                         st.rerun()
@@ -2370,11 +2747,12 @@ with tab2:
 
                     col_check, col_info, col_remove = st.columns([0.5, 5, 0.8])
                     with col_check:
-                        toggle_counter = st.session_state.get('yt_toggle_counter', 0)
-                        is_selected = st.checkbox(
-                            "sel", value=st.session_state['yt_queue_selection'].get(url, True),
-                            key=f"yt_queue_check_{idx}_{toggle_counter}", label_visibility="collapsed"
-                        )
+                        # key를 인덱스가 아닌 URL 기반으로 고정한다. 인덱스 기반이면
+                        # 항목을 삭제할 때 나머지 항목의 체크 상태가 한 칸씩 밀린다.
+                        _chk_key = _yt_check_key(url)
+                        if _chk_key not in st.session_state:
+                            st.session_state[_chk_key] = st.session_state['yt_queue_selection'].get(url, True)
+                        is_selected = st.checkbox("sel", key=_chk_key, label_visibility="collapsed")
                         st.session_state['yt_queue_selection'][url] = is_selected
                     with col_info:
                         st.markdown(f"**{info['title']}**")
@@ -2407,18 +2785,41 @@ with tab2:
                                 unsafe_allow_html=True
                             )
                     with col_remove:
-                        if st.button("✕", key=f"yt_remove_{idx}", help="Remove"):
+                        if st.button("✕", key=f"yt_remove_{idx}", help="큐에서 제거",
+                                     type="tertiary"):
                             items_to_remove.append(idx)
 
                 if items_to_remove:
                     for idx in sorted(items_to_remove, reverse=True):
                         removed_url = st.session_state['yt_queue'][idx]['url']
                         st.session_state['yt_queue'].pop(idx)
-                        if removed_url in st.session_state['yt_queue_selection']:
-                            del st.session_state['yt_queue_selection'][removed_url]
+                        st.session_state['yt_queue_selection'].pop(removed_url, None)
+                        st.session_state.pop(_yt_check_key(removed_url), None)
                     st.rerun()
             else:
-                st.info("Enter a YouTube URL above to begin")
+                st.info("위에 링크를 넣고 **Add to Queue**를 누르세요. 여러 개면 **＋ 링크 칸 추가**로 칸을 늘리거나, 한 칸에 여러 링크를 붙여넣어도 됩니다.")
+
+        # --- 배치 다운로드 (큐 패널 아래) ---
+        # 큐 패널 안에 두면 패널의 max-height/overflow 때문에 스크롤 밖으로 밀려
+        # 주 동작이 안 보일 수 있다. 그래서 패널 바깥에 둔다.
+        if st.session_state['yt_queue']:
+            _sel_count = sum(1 for item in st.session_state['yt_queue']
+                             if st.session_state['yt_queue_selection'].get(item['url'], True))
+            _dl_running = st.session_state.get('yt_download_running', False)
+            col_start, col_stop = st.columns([3, 1])
+            with col_start:
+                start_batch = st.button(
+                    f"▶ Batch Download ({_sel_count})" if _sel_count else "▶ Batch Download",
+                    type="primary", use_container_width=True,
+                    disabled=_dl_running or _sel_count == 0,
+                    key="yt_start_batch",
+                )
+            with col_stop:
+                stop_batch = st.button(
+                    "■ Stop", use_container_width=True,
+                    disabled=not _dl_running,
+                    key="yt_stop_batch",
+                )
 
     # --- Download logic (full width, after both columns) ---
     if stop_batch:
@@ -2434,40 +2835,44 @@ with tab2:
         st.toast("Batch download started", icon="📥")
         st.rerun()
 
-    if download_now_btn and youtube_url:
-        st.session_state['yt_download_running'] = True
-        download_and_convert_youtube(
-            youtube_url, yt_selected_codec, yt_selected_resolution, yt_selected_quality,
-            yt_selected_fps, yt_selected_scan, yt_custom_video_br, yt_custom_audio_br, download_only
-        )
-        st.session_state['yt_download_running'] = False
-        st.session_state['yt_url_input'] = ""
+    # 링크 → 큐 추가. 'Download Now'는 제거했다 — 배치 다운로드와 역할이 같아
+    # 두 버튼이 헷갈렸고, 링크가 여러 개일 때 '지금 다운로드'의 의미도 모호했다.
+    # 흐름은 하나로 통일했다: 링크 입력 → Add to Queue → Batch Download.
+    if add_to_queue_btn:
+        urls = _collect_url_rows()
+        if urls:
+            queue_settings = {
+                'codec': yt_selected_codec, 'resolution': yt_selected_resolution,
+                'quality': yt_selected_quality, 'fps': yt_selected_fps,
+                'scan': yt_selected_scan, 'custom_video_br': yt_custom_video_br,
+                'custom_audio_br': yt_custom_audio_br, 'download_only': download_only,
+            }
+            with st.spinner(f"{len(urls)}개 링크 정보를 가져오는 중..."):
+                added, skipped, failed = add_urls_to_queue(urls, queue_settings)
 
-    if add_to_queue_btn and youtube_url:
-        already_in_queue = youtube_url in [item['url'] for item in st.session_state['yt_queue']]
-        if not already_in_queue:
-            with st.spinner("Fetching video info from YouTube..."):
-                video_info = st.session_state['yt_downloader'].get_video_title_fast(youtube_url)
-            if video_info:
-                queue_item = {
-                    'url': youtube_url,
-                    'info': video_info,
-                    'settings': {
-                        'codec': yt_selected_codec, 'resolution': yt_selected_resolution,
-                        'quality': yt_selected_quality, 'fps': yt_selected_fps,
-                        'scan': yt_selected_scan, 'custom_video_br': yt_custom_video_br,
-                        'custom_audio_br': yt_custom_audio_br, 'download_only': download_only
-                    }
+            notes = []
+            if skipped:
+                notes.append(f"이미 큐에 있어 건너뜀: {len(skipped)}개")
+            if failed:
+                notes.append(
+                    f"정보를 가져올 수 없는 링크 {len(failed)}개 (URL을 확인하세요): "
+                    + ", ".join(f"`{u}`" for u in failed)
+                )
+
+            if added:
+                # 알림을 세션에 실어 보낸다. st.warning을 그린 뒤 st.rerun()하면
+                # 그 메시지가 지워져 사용자가 건너뜀/실패를 볼 수 없다.
+                st.session_state['yt_notice'] = {
+                    'type': 'warning' if notes else 'success',
+                    'msg': f"큐에 {len(added)}개 추가" + (" · " + " · ".join(notes) if notes else ""),
                 }
-                st.session_state['yt_queue'].append(queue_item)
-                st.session_state['yt_queue_selection'][youtube_url] = True
-                st.toast(f"Added to queue: {video_info['title']}", icon="📥")
-                st.session_state['yt_url_input'] = ""
+                _reset_url_rows()
                 st.rerun()
             else:
-                st.error("Cannot fetch video title. Check URL.")
-        else:
-            st.warning("Already in queue!")
+                # 추가된 게 없으면 rerun하지 않는다 — 입력을 그대로 남겨 사용자가
+                # 고칠 수 있게 하고, 이유를 바로 보여준다.
+                for note in notes:
+                    st.warning(note)
 
     if st.session_state.get('yt_download_running', False) and st.session_state['yt_queue']:
         selected_items = [item for item in st.session_state['yt_queue']
@@ -2477,7 +2882,7 @@ with tab2:
 
 
 # Tab 3: Mute Video (무음 비디오 생성)
-with tab3:
+if active_tab == TAB_MUTE:
     st.html("""
     <div class="vt-tab-hero">
         <p class="vt-tab-hero__title">Mute Track Utility</p>
@@ -2505,7 +2910,7 @@ with tab3:
                     <ul style="font-size: 0.85rem; margin: 0; padding-left: 1.25rem;">
                         <li>Paste a direct video URL (S3, CDN, archive) or local file path</li>
                         <li>Video stream is copied without re-encoding — <b>extremely fast</b></li>
-                        <li>Output saved to Downloads folder</li>
+                        <li>Progress is shown for both local files and URLs</li>
                     </ul>
                 </div>
             </div>
@@ -2520,51 +2925,108 @@ with tab3:
 
         default_output_name = "output_muted.mp4"
         if mute_input:
-            from urllib.parse import urlparse, unquote
             if mute_input.startswith(('http://', 'https://')):
-                parsed_path = urlparse(mute_input).path
-                src_name = os.path.splitext(os.path.basename(unquote(parsed_path)))[0]
+                parsed_path = urllib.parse.urlparse(mute_input).path
+                src_name = os.path.splitext(os.path.basename(urllib.parse.unquote(parsed_path)))[0]
             else:
                 src_name = os.path.splitext(os.path.basename(mute_input))[0]
             if src_name:
                 default_output_name = f"{src_name}_muted.mp4"
 
-        mute_output_name = st.text_input("Output filename:", value=default_output_name, key="mute_output_name")
+        # key를 가진 위젯은 session_state가 value= 인자를 이기므로, 소스가 바뀌었을 때만
+        # 출력 파일명을 다시 채운다(사용자가 직접 고친 이름은 보존).
+        if st.session_state.get('_mute_input_seen') != mute_input:
+            st.session_state['_mute_input_seen'] = mute_input
+            st.session_state['mute_output_name'] = default_output_name
 
-        default_save_path = os.path.join(os.path.expanduser("~"), "Downloads")
+        mute_output_name = st.text_input("Output filename:", key="mute_output_name")
+
+        # 저장 위치를 다른 탭과 동일하게 선택 가능하게 한다(기존에는 ~/Downloads 하드코딩).
+        mute_save_path = st.session_state['mute_save_folder_path']
         st.html(f'''
-        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; padding: 0.5rem 0.75rem; background-color: var(--bg-tertiary); border-radius: 0.375rem;">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem 0.75rem; background-color: var(--bg-tertiary); border-radius: 0.375rem;">
             <span style="font-size: 0.85rem;">📁</span>
-            <span style="font-size: 0.8rem; color: var(--text-secondary);">Save to: <b>{default_save_path}</b></span>
+            <span style="font-size: 0.8rem; color: var(--text-secondary);">Save to: <b>{_esc(mute_save_path)}</b></span>
         </div>
         ''')
+        if sys.platform == 'darwin':
+            if st.button("Change Folder", key="mute_folder_select", use_container_width=True,
+                         disabled=st.session_state['mute_running']):
+                chosen = open_folder_dialog(scan=False)
+                if chosen:
+                    st.session_state['mute_save_folder_path'] = chosen
+                    st.rerun()
 
-        if st.button("🔇 Generate Muted Video", type="primary", key="mute_generate_btn",
-                     disabled=not mute_input, use_container_width=True):
-            output_file = os.path.join(default_save_path, mute_output_name)
-            is_url = mute_input.startswith(('http://', 'https://'))
+        mc_run, mc_stop = st.columns([3, 1])
+        with mc_run:
+            mute_start = st.button(
+                "🔇 Generate Muted Video", type="primary", key="mute_generate_btn",
+                disabled=not mute_input or st.session_state['mute_running'],
+                use_container_width=True,
+            )
+        with mc_stop:
+            mute_stop = st.button(
+                "■ Stop", key="mute_stop_btn", use_container_width=True,
+                disabled=not st.session_state['mute_running'],
+            )
 
-            if is_url:
-                with st.spinner("Generating muted video from URL..."):
-                    success, msg = st.session_state['converter'].strip_audio(mute_input, output_file, None)
-            else:
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                status_text.markdown("**🔇 Generating muted video...**")
-                def mute_progress(p):
-                    progress_bar.progress(min(p, 1.0))
-                success, msg = st.session_state['converter'].strip_audio(mute_input, output_file, mute_progress)
-                status_text.empty()
-                if success:
-                    progress_bar.progress(1.0)
+        if mute_stop:
+            st.session_state['converter'].stop_conversion()
+            st.session_state['mute_running'] = False
+            st.toast("Mute 작업을 중단했습니다", icon="⏹️")
+            st.rerun()
+
+        if mute_start:
+            st.session_state['mute_running'] = True
+            st.rerun()
+
+        if st.session_state['mute_running'] and mute_input:
+            save_path, path_warning = resolve_writable_save_path(st.session_state['mute_save_folder_path'])
+            st.session_state['mute_save_folder_path'] = save_path
+            if path_warning:
+                st.warning(path_warning)
+            output_file = os.path.join(save_path, mute_output_name)
+
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            with st.spinner("길이 확인 중..."):
+                total_duration = st.session_state['converter'].probe_duration(mute_input)
+            if total_duration <= 0:
+                st.caption("ℹ️ 길이를 확인할 수 없어 처리된 시간으로 진행 상황을 표시합니다.")
+
+            def mute_progress(progress, processed, speed):
+                # progress가 None이면(길이 미확인) 처리 시간/속도만 보여준다.
+                if progress is not None:
+                    progress_bar.progress(min(progress, 1.0))
+                    status_text.markdown(
+                        f"**🔇 {progress*100:.1f}%** — "
+                        f"{int(processed // 60):02d}:{int(processed % 60):02d} / "
+                        f"{int(total_duration // 60):02d}:{int(total_duration % 60):02d}"
+                        + (f" | {speed}" if speed else "")
+                    )
                 else:
-                    progress_bar.empty()
+                    status_text.markdown(
+                        f"**🔇 처리 중** — {int(processed // 60):02d}:{int(processed % 60):02d} 처리됨"
+                        + (f" | {speed}" if speed else "")
+                    )
+
+            success, msg = st.session_state['converter'].strip_audio(
+                mute_input, output_file, mute_progress, total_duration=total_duration
+            )
+
+            st.session_state['mute_running'] = False
 
             if success:
+                progress_bar.progress(1.0)
                 file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
-                st.success(f"Saved: {mute_output_name} ({file_size_mb:.1f} MB)")
+                finish_operation(
+                    'success',
+                    f"🔇 무음 비디오 저장 완료 — {mute_output_name} ({file_size_mb:.1f} MB)",
+                    [f"📁 {output_file}"],
+                )
             else:
-                st.error(f"Failed: {msg}")
+                finish_operation('error', f"❌ 실패: {msg}")
 
 # 푸터
 st.markdown("---")

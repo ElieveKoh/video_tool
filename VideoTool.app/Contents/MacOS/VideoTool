@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Video Tool v6.0.4 Launcher
+# Video Tool Launcher
 # 앱 버전 (릴리즈할 때 함께 갱신)
-APP_VERSION="6.0.6"
+APP_VERSION="6.1.0"
 # GitHub 저장소
 GITHUB_REPO="ElieveKoh/video_tool"
 
@@ -304,17 +304,21 @@ else
     exit 1
 fi
 
-# pip 업그레이드
-echo "📦 pip 업그레이드 중..."
-python -m pip install --upgrade pip --quiet 2>&1 | grep -v "WARNING" || true
-
 # Streamlit 확인 및 설치
+# pip 업그레이드는 설치가 필요할 때만 한다. 이전에는 매 실행마다 수행해
+# 실행할 때마다 불필요한 네트워크 왕복이 발생했다.
 if python -c "import streamlit" 2>/dev/null; then
     echo "✅ Streamlit 이미 설치됨"
 else
+    echo "📦 pip 업그레이드 중..."
+    python -m pip install --upgrade pip --quiet 2>&1 | grep -v "WARNING" || true
     echo "📦 Streamlit 설치 중..."
-    # pyarrow 없이 streamlit만 설치
-    python -m pip install streamlit --no-cache-dir 2>&1 | grep -E "Successfully|ERROR" || echo "설치 중..."
+    # requirements.txt의 버전 핀을 따른다(핀 없이 설치하면 조용히 최신으로 올라가 앱이 깨질 수 있다)
+    if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
+        python -m pip install -r "$SCRIPT_DIR/requirements.txt" --no-cache-dir 2>&1 | grep -E "Successfully|ERROR" || echo "설치 중..."
+    else
+        python -m pip install streamlit --no-cache-dir 2>&1 | grep -E "Successfully|ERROR" || echo "설치 중..."
+    fi
 
     # 설치 확인
     if python -c "import streamlit" 2>/dev/null; then
